@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="color-scheme" content="light dark">
+<title>AI News</title>
+<style>
+:root{--bg:#f6f7f9;--fg:#1a1c20;--sub:#667085;--card:#fff;--line:#e4e7ec;--accent:#2563eb;--star:#f59e0b}
+@media (prefers-color-scheme:dark){:root{--bg:#101114;--fg:#e8eaed;--sub:#9aa0a6;--card:#1a1c20;--line:#2b2e34;--accent:#6ea8fe;--star:#fbbf24}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Noto Sans JP",sans-serif}
+[hidden]{display:none!important}
+#lock{min-height:100vh;display:grid;place-items:center;padding:16px}
+#form{width:100%;max-width:360px;display:grid;gap:12px}
+#form h1{margin:0;font-size:22px}
+input[type=password]{width:100%;padding:12px;font-size:16px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg)}
+button{padding:10px 14px;font-size:15px;border:0;border-radius:8px;background:var(--accent);color:#fff}
+button.ghost{background:transparent;color:var(--accent);border:1px solid var(--line)}
+#err{color:#d92d20;margin:0;min-height:1.4em;font-size:14px}
+header{position:sticky;top:0;z-index:1;background:var(--bg);border-bottom:1px solid var(--line);padding:8px 12px}
+nav{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+nav button.tab{background:transparent;color:var(--fg);border:1px solid var(--line);padding:6px 12px}
+nav button.tab[aria-pressed=true]{background:var(--accent);color:#fff;border-color:var(--accent)}
+#meta{font-size:12px;color:var(--sub);margin-top:4px}
+ul{list-style:none;margin:0;padding:12px;display:grid;gap:10px}
+li{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}
+li.read{opacity:.55}
+.row{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--sub)}
+.stars{color:var(--star);letter-spacing:1px}
+li a{display:block;margin:4px 0;font-weight:600;color:var(--fg);text-decoration:none}
+li p{margin:4px 0 8px;font-size:14px}
+li button{padding:4px 10px;font-size:12px}
+#empty{padding:24px;text-align:center;color:var(--sub)}
+</style>
+</head>
+<body>
+<main id="lock">
+  <form id="form">
+    <h1>AI News</h1>
+    <input id="pass" type="password" placeholder="パスコード" autocomplete="current-password" required>
+    <label><input id="remember" type="checkbox"> この端末で記憶する</label>
+    <button type="submit">開く</button>
+    <p id="err" role="alert"></p>
+  </form>
+</main>
+<div id="app" hidden>
+  <header>
+    <nav>
+      <button class="tab" data-tab="unread" aria-pressed="true">未読</button>
+      <button class="tab" data-tab="read" aria-pressed="false">既読</button>
+      <button class="tab" data-tab="all" aria-pressed="false">すべて</button>
+      <button class="ghost" id="markAll">表示中を既読に</button>
+    </nav>
+    <div id="meta"></div>
+  </header>
+  <ul id="list"></ul>
+  <div id="empty" hidden>該当する記事はありません</div>
+</div>
+<script>
+"use strict";
+const READ_KEY = "ai-news-read";
+const PASS_KEY = "ai-news-pass";
+const $ = (s) => document.querySelector(s);
+const b64d = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+// 暗号化データの復号（PBKDF2-SHA256 → AES-GCM）
+async function decryptPayload(p, passcode) {
+  const base = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(passcode), "PBKDF2", false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: b64d(p.salt), iterations: p.iter, hash: "SHA-256" },
+    base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+  const buf = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64d(p.iv) }, key, b64d(p.ct));
+  return JSON.parse(new TextDecoder().decode(buf));
+}
+
+// 既読状態（localStorage）
+function loadRead() {
+  try { return new Set(JSON.parse(localStorage.getItem(READ_KEY) || "[]")); }
+  catch (e) { return new Set(); }
+}
+function saveRead(set) {
+  try { localStorage.setItem(READ_KEY, JSON.stringify([...set])); } catch (e) { /* 保存不可は無視 */ }
+}
+
+let articles = [];
+let readSet = loadRead();
+let tab = "unread";
+
+function visibleArticles() {
+  return articles.filter((a) =>
+    tab === "all" ? true : tab === "read" ? readSet.has(a.id) : !readSet.has(a.id));
+}
+
+function render() {
+  const list = $("#list");
+  list.replaceChildren();
+  const items = visibleArticles();
+  $("#empty").hidden = items.length > 0;
+  for (const a of items) {
+    const li = document.createElement("li");
+    if (readSet.has(a.id)) li.className = "read";
+
+    const row = document.createElement("div");
+    row.className = "row";
+    const stars = document.createElement("span");
+    stars.className = "stars";
+    stars.textContent = "★".repeat(a.stars) + "☆".repeat(5 - a.stars);
+    const info = document.createElement("span");
+    const d = new Date(a.published).toLocaleString("ja-JP",
+      { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    info.textContent = a.source + " / " + d;
+    row.append(stars, info);
+
+    const link = document.createElement("a");
+    link.textContent = a.title;
+    if (/^https?:\/\//.test(a.url)) {
+      link.href = a.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+    }
+    // リンクを開いたら既読にする（再描画はしない）
+    link.addEventListener("click", () => {
+      readSet.add(a.id); saveRead(readSet); li.classList.add("read");
+    });
+
+    const p = document.createElement("p");
+    p.textContent = a.summary;
+
+    const btn = document.createElement("button");
+    btn.className = "ghost";
+    btn.textContent = readSet.has(a.id) ? "未読に戻す" : "既読にする";
+    btn.addEventListener("click", () => {
+      if (readSet.has(a.id)) readSet.delete(a.id); else readSet.add(a.id);
+      saveRead(readSet); render();
+    });
+
+    li.append(row, link, p, btn);
+    list.append(li);
+  }
+}
+
+async function unlock(passcode, remember) {
+  const res = await fetch("data.enc.json", { cache: "no-store" });
+  if (!res.ok) throw new Error("data");
+  const data = await decryptPayload(await res.json(), passcode);
+  articles = data.articles;
+  // 保持期間外の既読IDを掃除する
+  const ids = new Set(articles.map((a) => a.id));
+  readSet = new Set([...readSet].filter((id) => ids.has(id)));
+  saveRead(readSet);
+  if (remember) { try { localStorage.setItem(PASS_KEY, passcode); } catch (e) { /* 無視 */ } }
+  $("#meta").textContent = "更新: " + new Date(data.updated).toLocaleString("ja-JP");
+  $("#lock").hidden = true;
+  $("#app").hidden = false;
+  render();
+}
+
+$("#form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  $("#err").textContent = "";
+  try {
+    await unlock($("#pass").value, $("#remember").checked);
+  } catch (e) {
+    $("#err").textContent = "パスコードが違うか、データを取得できません。";
+  }
+});
+
+document.querySelectorAll(".tab").forEach((b) =>
+  b.addEventListener("click", () => {
+    tab = b.dataset.tab;
+    document.querySelectorAll(".tab").forEach((x) =>
+      x.setAttribute("aria-pressed", String(x === b)));
+    render();
+  }));
+
+$("#markAll").addEventListener("click", () => {
+  visibleArticles().forEach((a) => readSet.add(a.id));
+  saveRead(readSet); render();
+});
+
+// 記憶済みパスコードで自動ログイン
+(async () => {
+  let saved = null;
+  try { saved = localStorage.getItem(PASS_KEY); } catch (e) { /* 無視 */ }
+  if (saved) {
+    try { await unlock(saved, false); }
+    catch (e) { try { localStorage.removeItem(PASS_KEY); } catch (e2) { /* 無視 */ } }
+  }
+})();
+</script>
+</body>
+</html>

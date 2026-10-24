@@ -25,7 +25,7 @@ flowchart LR
     E --> F["スマホ ブラウザー<br/>パスコードで復号"]
 ```
 
-詳細な構成図と設計判断は [SETUP.md](SETUP.md) を参照してください。
+詳細な構成図と設計判断は [DeploymentGuide.md](DeploymentGuide.md) を参照してください。
 
 ## 必要なもの
 
@@ -48,7 +48,7 @@ flowchart LR
 5. Actions → update-news → **Run workflow** で初回実行する。
 6. `https://<ユーザー名>.github.io/<リポジトリー名>/` を開き、パスコードを入力する。
 
-詳しい手順は [SETUP.md](SETUP.md) の「4. 作業手順」を参照してください。
+詳しい手順は [DeploymentGuide.md](DeploymentGuide.md) の「4. 作業手順」を参照してください。
 
 ## ディレクトリー構成
 

@@ -1,0 +1,21 @@
+# 使用モデル（ID は要確認。確認コマンドは手順書の「4. 作業手順」を参照）
+model: gemini-2.5-flash
+
+# 取得対象フィード（HTTP 200 を確認済みの RSS/Atom）
+feeds:
+  - name: OpenAI News
+    url: https://openai.com/news/rss.xml
+  - name: Hugging Face Blog
+    url: https://huggingface.co/blog/feed.xml
+  - name: TechCrunch AI
+    url: https://techcrunch.com/category/artificial-intelligence/feed/
+  - name: MIT Technology Review AI
+    url: https://www.technologyreview.com/topic/artificial-intelligence/feed
+  - name: AWS Machine Learning Blog
+    url: https://aws.amazon.com/blogs/machine-learning/feed/
+
+max_age_hours: 48       # 公開から何時間以内の記事を対象にするか
+per_feed_limit: 10      # 1 フィードあたりの最大取得件数
+max_new_per_run: 30     # 1 回の実行で要約する最大件数
+batch_size: 10          # 1 リクエストで要約する件数
+retention_days: 14      # 保持日数
