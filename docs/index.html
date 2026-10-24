@@ -23,6 +23,9 @@ header{position:sticky;top:0;z-index:1;background:var(--bg);border-bottom:1px so
 nav{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 nav button.tab{background:transparent;color:var(--fg);border:1px solid var(--line);padding:6px 12px}
 nav button.tab[aria-pressed=true]{background:var(--accent);color:#fff;border-color:var(--accent)}
+#filters{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+#filters input,#filters select{padding:6px 8px;font-size:14px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg)}
+#filters input{flex:1 1 140px;min-width:0}
 #meta{font-size:12px;color:var(--sub);margin-top:4px}
 ul{list-style:none;margin:0;padding:12px;display:grid;gap:10px}
 li{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}
@@ -53,6 +56,17 @@ li button{padding:4px 10px;font-size:12px}
       <button class="tab" data-tab="all" aria-pressed="false">すべて</button>
       <button class="ghost" id="markAll">表示中を既読に</button>
     </nav>
+    <div id="filters">
+      <input id="q" type="search" placeholder="キーワード" aria-label="キーワード検索">
+      <select id="src" aria-label="ソース"><option value="">全ソース</option></select>
+      <select id="minStars" aria-label="注目度">
+        <option value="1">★1以上</option>
+        <option value="2">★2以上</option>
+        <option value="3">★3以上</option>
+        <option value="4">★4以上</option>
+        <option value="5">★5のみ</option>
+      </select>
+    </div>
     <div id="meta"></div>
   </header>
   <ul id="list"></ul>
@@ -90,8 +104,26 @@ let readSet = loadRead();
 let tab = "unread";
 
 function visibleArticles() {
+  const q = $("#q").value.trim().toLowerCase();
+  const src = $("#src").value;
+  const min = Number($("#minStars").value);
   return articles.filter((a) =>
-    tab === "all" ? true : tab === "read" ? readSet.has(a.id) : !readSet.has(a.id));
+    (tab === "all" ? true : tab === "read" ? readSet.has(a.id) : !readSet.has(a.id)) &&
+    (!src || a.source === src) &&
+    a.stars >= min &&
+    (!q || (a.title + " " + a.summary).toLowerCase().includes(q)));
+}
+
+// データ中のソース名からセレクトの選択肢を作る
+function fillSources() {
+  const sel = $("#src");
+  sel.replaceChildren(sel.options[0]);
+  for (const name of [...new Set(articles.map((a) => a.source))].sort()) {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    sel.append(opt);
+  }
 }
 
 function render() {
@@ -153,6 +185,7 @@ async function unlock(passcode, remember) {
   saveRead(readSet);
   if (remember) { try { localStorage.setItem(PASS_KEY, passcode); } catch (e) { /* 無視 */ } }
   $("#meta").textContent = "更新: " + new Date(data.updated).toLocaleString("ja-JP");
+  fillSources();
   $("#lock").hidden = true;
   $("#app").hidden = false;
   render();
@@ -175,6 +208,9 @@ document.querySelectorAll(".tab").forEach((b) =>
       x.setAttribute("aria-pressed", String(x === b)));
     render();
   }));
+
+["#q", "#src", "#minStars"].forEach((s) =>
+  $(s).addEventListener(s === "#q" ? "input" : "change", render));
 
 $("#markAll").addEventListener("click", () => {
   visibleArticles().forEach((a) => readSet.add(a.id));
