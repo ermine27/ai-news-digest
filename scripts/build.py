@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import socket
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -99,7 +100,9 @@ def fetch_new_articles(cfg: dict, seen_ids: set) -> list:
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=cfg.get("max_age_hours", 48))
     found = {}
+    socket.setdefaulttimeout(30)  # 応答しないフィードで固まらないようにする
     for feed in cfg["feeds"]:
+        print(f"取得中: {feed['name']}", flush=True)
         parsed = feedparser.parse(feed["url"], agent="ai-news-bot/1.0")
         if not parsed.entries:
             print(f"[警告] 記事なし/取得失敗: {feed['name']}")
@@ -173,11 +176,14 @@ def main() -> None:
         print("新規記事なし。data.enc.json は更新しません。")
         return
 
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(
+        api_key=api_key, http_options=types.HttpOptions(timeout=120_000)  # ミリ秒
+    )
     size = cfg.get("batch_size", 10)
     added = 0
     for i in range(0, len(new_items), size):
         chunk = new_items[i : i + size]
+        print(f"要約中: {i + 1}〜{i + len(chunk)} 件目", flush=True)
         result = summarize_batch(client, cfg["model"], chunk)
         for a in chunk:
             r = result.get(a["id"])
