@@ -168,7 +168,18 @@ def main() -> None:
     cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
     state = load_state(passcode)
     articles = state.get("articles", [])
-    seen = {a["id"] for a in articles}
+    now = datetime.now(timezone.utc)
+    keep_from = (now - timedelta(days=cfg.get("retention_days", 14))).isoformat()
+    # 要約に失敗した記事の試行回数（記事本体は保存しない）。保持期間を過ぎたら捨てる
+    failures = {
+        k: v for k, v in state.get("failures", {}).items() if v["last"] >= keep_from
+    }
+    failures_before = json.dumps(failures, sort_keys=True)
+    max_attempts = cfg.get("max_summary_attempts", 3)
+    given_up = {k for k, v in failures.items() if v["count"] >= max_attempts}
+    if given_up:
+        print(f"試行上限に達して見送り中: {len(given_up)} 件")
+    seen = {a["id"] for a in articles} | given_up
 
     new_items = fetch_new_articles(cfg, seen)
     print(f"新規候補: {len(new_items)} 件")
@@ -181,6 +192,7 @@ def main() -> None:
     )
     size = cfg.get("batch_size", 10)
     added = 0
+    failed = 0
     for i in range(0, len(new_items), size):
         chunk = new_items[i : i + size]
         print(f"要約中: {i + 1}〜{i + len(chunk)} 件目", flush=True)
@@ -188,7 +200,12 @@ def main() -> None:
         for a in chunk:
             r = result.get(a["id"])
             if not r:
-                continue  # 保存しない → 次回実行で再試行される
+                # 記事は保存しない → 次回実行で再試行される（回数は上限まで数える）
+                n = failures.get(a["id"], {}).get("count", 0) + 1
+                failures[a["id"]] = {"count": n, "last": now.isoformat()}
+                failed += 1
+                continue
+            failures.pop(a["id"], None)
             try:
                 stars = max(1, min(5, int(r.get("stars", 3))))
             except (TypeError, ValueError):
@@ -207,17 +224,22 @@ def main() -> None:
             added += 1
         time.sleep(5)  # RPM 対策の間隔
 
-    if added == 0:
-        print("要約に成功した記事がありません。data.enc.json は更新しません。")
+    print(f"要約結果: 成功 {added} 件 / 失敗 {failed} 件", flush=True)
+    for aid, f in failures.items():
+        if f["count"] >= max_attempts and aid not in given_up:
+            print(f"[警告] 試行上限に達したため今後は見送ります: {aid}")
+
+    if added == 0 and json.dumps(failures, sort_keys=True) == failures_before:
+        print("要約に成功した記事がなく、失敗記録も変わりません。data.enc.json は更新しません。")
         return
 
-    keep_from = datetime.now(timezone.utc) - timedelta(days=cfg.get("retention_days", 14))
-    articles = [a for a in articles if a["published"] >= keep_from.isoformat()]
+    articles = [a for a in articles if a["published"] >= keep_from]
     articles.sort(key=lambda a: a["published"], reverse=True)
 
     out = {
         "updated": datetime.now(timezone.utc).isoformat(),
         "articles": articles,
+        "failures": failures,
     }
     DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     DATA_PATH.write_text(json.dumps(encrypt(out, passcode)), encoding="utf-8")
