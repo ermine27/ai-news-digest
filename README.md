@@ -60,8 +60,11 @@ flowchart LR
 ├─ scripts/build.py               # 取得・要約・暗号化
 └─ docs/
    ├─ index.html                  # 閲覧画面(Pages で配信)
+   ├─ manifest.json, sw.js, icon-*.png  # PWA(ホーム画面に追加・オフライン閲覧)
    └─ data.enc.json               # 暗号化データ(自動生成)
 ```
+
+PWA: Service Worker は公開済みの静的ファイルと暗号化データだけをキャッシュします(平文・パスコードは含みません)。オンライン時は常に最新を取得し、失敗時のみキャッシュを使います。
 
 ## 設定 (`config.yml`)
 
