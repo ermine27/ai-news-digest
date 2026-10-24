@@ -37,7 +37,7 @@ PROMPT = """あなたはAI分野のニュース編集者です。
 3=実務に役立つ技術情報・ツール更新
 2=小規模な更新・解説記事
 1=宣伝色が強い・重要度が低い
-
+__INTERESTS__
 入力:
 __ARTICLES__
 """
@@ -132,13 +132,29 @@ def fetch_new_articles(cfg: dict, seen_ids: set) -> list:
     return articles[: cfg.get("max_new_per_run", 30)]
 
 
-def summarize_batch(client, model: str, batch: list) -> dict:
+def build_prompt(payload: list, interests: list) -> str:
+    """要約プロンプトを組み立てる。interests があれば採点の補正指示を加える"""
+    topics = [str(t).strip() for t in interests if str(t).strip()]
+    if topics:
+        note = (
+            "\n読者の関心領域: " + "、".join(topics) + "\n"
+            "上の基準で採点したうえで、関心領域に直接関わる記事は1段階上げ、"
+            "無関係な記事は1段階下げてください（結果は1〜5に収める）。\n"
+        )
+    else:
+        note = ""
+    return PROMPT.replace("__INTERESTS__", note).replace(
+        "__ARTICLES__", json.dumps(payload, ensure_ascii=False)
+    )
+
+
+def summarize_batch(client, model: str, batch: list, interests: list) -> dict:
     """記事のまとまりを 1 リクエストで要約・翻訳・採点する。失敗時は空辞書"""
     payload = [
         {"id": a["id"], "title": a["title"], "text": a["text"], "source": a["source"]}
         for a in batch
     ]
-    prompt = PROMPT.replace("__ARTICLES__", json.dumps(payload, ensure_ascii=False))
+    prompt = build_prompt(payload, interests)
     for attempt in range(4):
         try:
             resp = client.models.generate_content(
@@ -196,7 +212,7 @@ def main() -> None:
     for i in range(0, len(new_items), size):
         chunk = new_items[i : i + size]
         print(f"要約中: {i + 1}〜{i + len(chunk)} 件目", flush=True)
-        result = summarize_batch(client, cfg["model"], chunk)
+        result = summarize_batch(client, cfg["model"], chunk, cfg.get("interests") or [])
         for a in chunk:
             r = result.get(a["id"])
             if not r:
