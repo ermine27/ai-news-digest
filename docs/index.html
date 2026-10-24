@@ -35,6 +35,8 @@ li.read{opacity:.55}
 li a{display:block;margin:4px 0;font-weight:600;color:var(--fg);text-decoration:none}
 li p{margin:4px 0 8px;font-size:14px}
 li button{padding:4px 10px;font-size:12px}
+details{margin:4px 0 8px;font-size:13px;color:var(--sub)}
+details a{font-size:13px;font-weight:400;margin:2px 0 2px 12px;color:var(--accent)}
 #empty{padding:24px;text-align:center;color:var(--sub)}
 </style>
 </head>
@@ -103,11 +105,27 @@ let articles = [];
 let readSet = loadRead();
 let tab = "unread";
 
+// 代表記事が残っている重複記事は、一覧から外して代表記事の下にまとめる
+function groupDuplicates() {
+  const ids = new Set(articles.map((a) => a.id));
+  const related = new Map();
+  const primaries = [];
+  for (const a of articles) {
+    if (a.dup_of && ids.has(a.dup_of)) {
+      if (!related.has(a.dup_of)) related.set(a.dup_of, []);
+      related.get(a.dup_of).push(a);
+    } else {
+      primaries.push(a);
+    }
+  }
+  return { primaries, related };
+}
+
 function visibleArticles() {
   const q = $("#q").value.trim().toLowerCase();
   const src = $("#src").value;
   const min = Number($("#minStars").value);
-  return articles.filter((a) =>
+  return groupDuplicates().primaries.filter((a) =>
     (tab === "all" ? true : tab === "read" ? readSet.has(a.id) : !readSet.has(a.id)) &&
     (!src || a.source === src) &&
     a.stars >= min &&
@@ -130,6 +148,7 @@ function render() {
   const list = $("#list");
   list.replaceChildren();
   const items = visibleArticles();
+  const related = groupDuplicates().related;
   $("#empty").hidden = items.length > 0;
   for (const a of items) {
     const li = document.createElement("li");
@@ -169,7 +188,26 @@ function render() {
       saveRead(readSet); render();
     });
 
-    li.append(row, link, p, btn);
+    li.append(row, link, p);
+    const rel = related.get(a.id);
+    if (rel) {
+      const det = document.createElement("details");
+      const sum = document.createElement("summary");
+      sum.textContent = "同じニュース 他 " + rel.length + " 件";
+      det.append(sum);
+      for (const r of rel) {
+        const ra = document.createElement("a");
+        ra.textContent = r.source + ": " + r.title;
+        if (/^https?:\/\//.test(r.url)) {
+          ra.href = r.url;
+          ra.target = "_blank";
+          ra.rel = "noopener noreferrer";
+        }
+        det.append(ra);
+      }
+      li.append(det);
+    }
+    li.append(btn);
     list.append(li);
   }
 }
