@@ -14,8 +14,15 @@ feeds:
   - name: AWS Machine Learning Blog
     url: https://aws.amazon.com/blogs/machine-learning/feed/
 
+# 関心領域（注目度の補正に使う。空または削除で従来どおりの採点）
+interests:
+  - LLM の実務活用・開発ツール
+  - AI 規制・政策
+  - 新モデルの発表と性能評価
+
 max_age_hours: 48       # 公開から何時間以内の記事を対象にするか
 per_feed_limit: 10      # 1 フィードあたりの最大取得件数
 max_new_per_run: 30     # 1 回の実行で要約する最大件数
 batch_size: 5           # 1 リクエストで要約する件数
 retention_days: 14      # 保持日数
+max_summary_attempts: 3 # 要約に失敗した記事を再試行する実行回数の上限

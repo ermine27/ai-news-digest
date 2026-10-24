@@ -37,7 +37,7 @@ PROMPT = """あなたはAI分野のニュース編集者です。
 3=実務に役立つ技術情報・ツール更新
 2=小規模な更新・解説記事
 1=宣伝色が強い・重要度が低い
-
+__INTERESTS__
 入力:
 __ARTICLES__
 """
@@ -132,13 +132,29 @@ def fetch_new_articles(cfg: dict, seen_ids: set) -> list:
     return articles[: cfg.get("max_new_per_run", 30)]
 
 
-def summarize_batch(client, model: str, batch: list) -> dict:
+def build_prompt(payload: list, interests: list) -> str:
+    """要約プロンプトを組み立てる。interests があれば採点の補正指示を加える"""
+    topics = [str(t).strip() for t in interests if str(t).strip()]
+    if topics:
+        note = (
+            "\n読者の関心領域: " + "、".join(topics) + "\n"
+            "上の基準で採点したうえで、関心領域に直接関わる記事は1段階上げ、"
+            "無関係な記事は1段階下げてください（結果は1〜5に収める）。\n"
+        )
+    else:
+        note = ""
+    return PROMPT.replace("__INTERESTS__", note).replace(
+        "__ARTICLES__", json.dumps(payload, ensure_ascii=False)
+    )
+
+
+def summarize_batch(client, model: str, batch: list, interests: list) -> dict:
     """記事のまとまりを 1 リクエストで要約・翻訳・採点する。失敗時は空辞書"""
     payload = [
         {"id": a["id"], "title": a["title"], "text": a["text"], "source": a["source"]}
         for a in batch
     ]
-    prompt = PROMPT.replace("__ARTICLES__", json.dumps(payload, ensure_ascii=False))
+    prompt = build_prompt(payload, interests)
     for attempt in range(4):
         try:
             resp = client.models.generate_content(
@@ -168,7 +184,18 @@ def main() -> None:
     cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
     state = load_state(passcode)
     articles = state.get("articles", [])
-    seen = {a["id"] for a in articles}
+    now = datetime.now(timezone.utc)
+    keep_from = (now - timedelta(days=cfg.get("retention_days", 14))).isoformat()
+    # 要約に失敗した記事の試行回数（記事本体は保存しない）。保持期間を過ぎたら捨てる
+    failures = {
+        k: v for k, v in state.get("failures", {}).items() if v["last"] >= keep_from
+    }
+    failures_before = json.dumps(failures, sort_keys=True)
+    max_attempts = cfg.get("max_summary_attempts", 3)
+    given_up = {k for k, v in failures.items() if v["count"] >= max_attempts}
+    if given_up:
+        print(f"試行上限に達して見送り中: {len(given_up)} 件")
+    seen = {a["id"] for a in articles} | given_up
 
     new_items = fetch_new_articles(cfg, seen)
     print(f"新規候補: {len(new_items)} 件")
@@ -181,14 +208,20 @@ def main() -> None:
     )
     size = cfg.get("batch_size", 10)
     added = 0
+    failed = 0
     for i in range(0, len(new_items), size):
         chunk = new_items[i : i + size]
         print(f"要約中: {i + 1}〜{i + len(chunk)} 件目", flush=True)
-        result = summarize_batch(client, cfg["model"], chunk)
+        result = summarize_batch(client, cfg["model"], chunk, cfg.get("interests") or [])
         for a in chunk:
             r = result.get(a["id"])
             if not r:
-                continue  # 保存しない → 次回実行で再試行される
+                # 記事は保存しない → 次回実行で再試行される（回数は上限まで数える）
+                n = failures.get(a["id"], {}).get("count", 0) + 1
+                failures[a["id"]] = {"count": n, "last": now.isoformat()}
+                failed += 1
+                continue
+            failures.pop(a["id"], None)
             try:
                 stars = max(1, min(5, int(r.get("stars", 3))))
             except (TypeError, ValueError):
@@ -207,17 +240,22 @@ def main() -> None:
             added += 1
         time.sleep(5)  # RPM 対策の間隔
 
-    if added == 0:
-        print("要約に成功した記事がありません。data.enc.json は更新しません。")
+    print(f"要約結果: 成功 {added} 件 / 失敗 {failed} 件", flush=True)
+    for aid, f in failures.items():
+        if f["count"] >= max_attempts and aid not in given_up:
+            print(f"[警告] 試行上限に達したため今後は見送ります: {aid}")
+
+    if added == 0 and json.dumps(failures, sort_keys=True) == failures_before:
+        print("要約に成功した記事がなく、失敗記録も変わりません。data.enc.json は更新しません。")
         return
 
-    keep_from = datetime.now(timezone.utc) - timedelta(days=cfg.get("retention_days", 14))
-    articles = [a for a in articles if a["published"] >= keep_from.isoformat()]
+    articles = [a for a in articles if a["published"] >= keep_from]
     articles.sort(key=lambda a: a["published"], reverse=True)
 
     out = {
         "updated": datetime.now(timezone.utc).isoformat(),
         "articles": articles,
+        "failures": failures,
     }
     DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     DATA_PATH.write_text(json.dumps(encrypt(out, passcode)), encoding="utf-8")
