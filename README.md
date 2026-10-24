@@ -74,6 +74,7 @@ flowchart LR
 | `max_new_per_run` | 30 | 1 回の実行で要約する最大件数 |
 | `batch_size` | 10 | 1 リクエストで要約する件数 |
 | `retention_days` | 14 | 記事の保持日数 |
+| `max_summary_attempts` | 3 | 要約に失敗した記事を再試行する実行回数の上限。超えた記事は見送る |
 | `interests` | (任意) | 関心領域のリスト。注目度の採点を補正する。空または削除で従来どおり |
 
 有効なモデル ID の確認(`GEMINI_API_KEY` を設定した状態で実行):

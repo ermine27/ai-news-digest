@@ -25,3 +25,4 @@ per_feed_limit: 10      # 1 フィードあたりの最大取得件数
 max_new_per_run: 30     # 1 回の実行で要約する最大件数
 batch_size: 5           # 1 リクエストで要約する件数
 retention_days: 14      # 保持日数
+max_summary_attempts: 3 # 要約に失敗した記事を再試行する実行回数の上限
