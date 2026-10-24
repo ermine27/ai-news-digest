@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#2563eb">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
 <title>AI News</title>
 <style>
 :root{--bg:#f6f7f9;--fg:#1a1c20;--sub:#667085;--card:#fff;--line:#e4e7ec;--accent:#2563eb;--star:#f59e0b}
@@ -216,6 +219,11 @@ $("#markAll").addEventListener("click", () => {
   visibleArticles().forEach((a) => readSet.add(a.id));
   saveRead(readSet); render();
 });
+
+// オフライン閲覧用の Service Worker(未対応・失敗時は無視)
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => { /* 無視 */ });
+}
 
 // 記憶済みパスコードで自動ログイン
 (async () => {
