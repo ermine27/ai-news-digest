@@ -148,6 +148,8 @@ def summarize_batch(client, model: str, batch: list) -> dict:
             items = json.loads(resp.text)
             return {i["id"]: i for i in items if isinstance(i, dict) and "id" in i}
         except Exception as exc:  # 429・JSON不正などを含めて再試行する
+            if getattr(exc, "code", None) in (400, 401, 403, 404):
+                sys.exit(f"[エラー] 再試行しても解消しない失敗です（モデルID・APIキーを確認）: {exc}")
             wait = 20 * (attempt + 1)
             print(f"[警告] 要約失敗({attempt + 1}/4): {exc} → {wait}秒待機")
             time.sleep(wait)

@@ -1,5 +1,5 @@
 # 使用モデル（ID は要確認。確認コマンドは手順書の「4. 作業手順」を参照）
-model: gemini-2.5-flash
+model: gemini-3.8-flash
 
 # 取得対象フィード（HTTP 200 を確認済みの RSS/Atom）
 feeds:
