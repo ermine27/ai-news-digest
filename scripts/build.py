@@ -177,7 +177,7 @@ def main() -> None:
         return
 
     client = genai.Client(
-        api_key=api_key, http_options=types.HttpOptions(timeout=120_000)  # ミリ秒
+        api_key=api_key, http_options=types.HttpOptions(timeout=60_000)  # ミリ秒
     )
     size = cfg.get("batch_size", 10)
     added = 0
