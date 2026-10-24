@@ -72,3 +72,46 @@ def test_fetch_respects_max_new_per_run_newest_first(fake_feed):
     fake_feed([_entry(f"http://x/{i}", now - timedelta(hours=i)) for i in range(5)])
     items = build.fetch_new_articles({**CFG, "max_new_per_run": 2}, set())
     assert [a["url"] for a in items] == ["http://x/0", "http://x/1"]
+
+
+def _batch(*ids):
+    return [{"id": i} for i in ids]
+
+
+def test_resolve_dup_of_known_and_in_batch_chain():
+    result = {
+        "b": {"dup_of": "k1"},  # 既出記事に重複
+        "c": {"dup_of": "b"},  # 先頭側の重複記事 → 代表 k1 までたどる
+        "d": {"dup_of": "a"},  # 先頭側の代表記事
+    }
+    roots = build.resolve_dup_of(_batch("a", "b", "c", "d"), result, {"k1"})
+    assert roots == {"a": None, "b": "k1", "c": "k1", "d": "a"}
+
+
+def test_resolve_dup_of_ignores_invalid_targets():
+    result = {
+        "a": {"dup_of": "a"},  # 自己参照
+        "b": {"dup_of": "zzz"},  # 未知のid
+        "c": {"dup_of": "d"},  # 入力の後ろ側(循環の元)
+        "d": {"dup_of": None},
+        "e": {"dup_of": 123},  # 型不正
+    }
+    roots = build.resolve_dup_of(_batch("a", "b", "c", "d", "e"), result, set())
+    assert all(v is None for v in roots.values())
+
+
+def test_known_for_dedup_excludes_duplicates_and_old():
+    now = datetime.now(timezone.utc)
+    arts = [
+        {"id": "p", "title": "代表", "published": (now - timedelta(hours=1)).isoformat()},
+        {"id": "d", "title": "重複", "dup_of": "p",
+         "published": (now - timedelta(hours=1)).isoformat()},
+        {"id": "o", "title": "古い", "published": (now - timedelta(hours=200)).isoformat()},
+    ]
+    assert build.known_for_dedup(arts, 72) == [{"id": "p", "title": "代表"}]
+
+
+def test_build_prompt_embeds_known_and_articles():
+    p = build.build_prompt([{"id": "n1"}], [], [{"id": "k1", "title": "既出"}])
+    assert "k1" in p and "n1" in p
+    assert "__KNOWN__" not in p and "__ARTICLES__" not in p

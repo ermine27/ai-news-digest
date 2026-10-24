@@ -30,6 +30,7 @@ PROMPT = """あなたはAI分野のニュース編集者です。
 - title_ja: 日本語タイトル（40字以内）
 - summary_ja: 日本語要約（2〜3文、140字以内。固有名詞は原語のまま。入力にない情報は書かない）
 - stars: 注目度（1〜5の整数）
+- dup_of: 同じ出来事を扱う記事が「既出の記事」または入力の先頭側にあれば、その記事のid。なければ null（別の切り口・続報は重複としない）
 
 注目度の基準:
 5=業界全体に影響する発表（主要モデル・規制・大型提携）
@@ -38,6 +39,9 @@ PROMPT = """あなたはAI分野のニュース編集者です。
 2=小規模な更新・解説記事
 1=宣伝色が強い・重要度が低い
 __INTERESTS__
+既出の記事（dup_of の候補）:
+__KNOWN__
+
 入力:
 __ARTICLES__
 """
@@ -132,7 +136,7 @@ def fetch_new_articles(cfg: dict, seen_ids: set) -> list:
     return articles[: cfg.get("max_new_per_run", 30)]
 
 
-def build_prompt(payload: list, interests: list) -> str:
+def build_prompt(payload: list, interests: list, known: list) -> str:
     """要約プロンプトを組み立てる。interests があれば採点の補正指示を加える"""
     topics = [str(t).strip() for t in interests if str(t).strip()]
     if topics:
@@ -143,18 +147,48 @@ def build_prompt(payload: list, interests: list) -> str:
         )
     else:
         note = ""
-    return PROMPT.replace("__INTERESTS__", note).replace(
-        "__ARTICLES__", json.dumps(payload, ensure_ascii=False)
+    return (
+        PROMPT.replace("__INTERESTS__", note)
+        .replace("__KNOWN__", json.dumps(known, ensure_ascii=False))
+        .replace("__ARTICLES__", json.dumps(payload, ensure_ascii=False))
     )
 
 
-def summarize_batch(client, model: str, batch: list, interests: list) -> dict:
+def known_for_dedup(articles: list, window_hours: int, limit: int = 60) -> list:
+    """重複判定の候補にする既出記事(代表記事のみ・新しい順)を id とタイトルだけで返す"""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
+    recent = [a for a in articles if not a.get("dup_of") and a["published"] >= cutoff]
+    recent.sort(key=lambda a: a["published"], reverse=True)
+    return [{"id": a["id"], "title": a["title"]} for a in recent[:limit]]
+
+
+def resolve_dup_of(batch: list, result: dict, known_ids: set) -> dict:
+    """各記事の代表記事 id を返す(なければ None)。
+
+    Gemini が返した dup_of は、既出記事か入力の先頭側の記事を指す場合だけ採用し、
+    指す先がさらに重複なら代表記事までたどる。自己参照・未知の id は無視する。
+    """
+    roots = {}
+    for a in batch:
+        target = (result.get(a["id"]) or {}).get("dup_of")
+        if not isinstance(target, str) or target == a["id"]:
+            roots[a["id"]] = None
+        elif target in known_ids:
+            roots[a["id"]] = target
+        elif target in roots:  # 入力の先頭側(処理済み)の記事
+            roots[a["id"]] = roots[target] or target
+        else:
+            roots[a["id"]] = None
+    return roots
+
+
+def summarize_batch(client, model: str, batch: list, interests: list, known: list) -> dict:
     """記事のまとまりを 1 リクエストで要約・翻訳・採点する。失敗時は空辞書"""
     payload = [
         {"id": a["id"], "title": a["title"], "text": a["text"], "source": a["source"]}
         for a in batch
     ]
-    prompt = build_prompt(payload, interests)
+    prompt = build_prompt(payload, interests, known)
     for attempt in range(4):
         try:
             resp = client.models.generate_content(
@@ -212,7 +246,11 @@ def main() -> None:
     for i in range(0, len(new_items), size):
         chunk = new_items[i : i + size]
         print(f"要約中: {i + 1}〜{i + len(chunk)} 件目", flush=True)
-        result = summarize_batch(client, cfg["model"], chunk, cfg.get("interests") or [])
+        known = known_for_dedup(articles, cfg.get("dedup_window_hours", 72))
+        result = summarize_batch(
+            client, cfg["model"], chunk, cfg.get("interests") or [], known
+        )
+        dups = resolve_dup_of(chunk, result, {k["id"] for k in known})
         for a in chunk:
             r = result.get(a["id"])
             if not r:
@@ -226,17 +264,18 @@ def main() -> None:
                 stars = max(1, min(5, int(r.get("stars", 3))))
             except (TypeError, ValueError):
                 stars = 3
-            articles.append(
-                {
-                    "id": a["id"],
-                    "url": a["url"],
-                    "source": a["source"],
-                    "title": str(r.get("title_ja") or a["title"]),
-                    "summary": str(r.get("summary_ja") or ""),
-                    "stars": stars,
-                    "published": a["published"],
-                }
-            )
+            item = {
+                "id": a["id"],
+                "url": a["url"],
+                "source": a["source"],
+                "title": str(r.get("title_ja") or a["title"]),
+                "summary": str(r.get("summary_ja") or ""),
+                "stars": stars,
+                "published": a["published"],
+            }
+            if dups.get(a["id"]):
+                item["dup_of"] = dups[a["id"]]
+            articles.append(item)
             added += 1
         time.sleep(5)  # RPM 対策の間隔
 
