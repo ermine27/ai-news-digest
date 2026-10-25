@@ -73,7 +73,7 @@ PWA: Service Worker は公開済みの静的ファイルと暗号化データだ
 | `model` | `gemini-2.5-flash` | 使用モデル。有効な ID は要確認 |
 | `fallback_models` | `[]` | 主モデルが一時エラーで失敗し続けたときに順に試すモデル ID。未設定なら使わない |
 | `feeds` | (要設定) | `name` と `url` のリスト |
-| `max_age_hours` | 48 | 公開から何時間以内の記事を対象にするか |
+| `max_age_hours` | 48 | 公開から何時間以内の記事を対象にするか。要約に失敗中の記事は `retention_days` の範囲で再試行する |
 | `per_feed_limit` | 10 | 1 フィードあたりの最大取得件数 |
 | `max_new_per_run` | 30 | 1 回の実行で要約する最大件数 |
 | `batch_size` | 10 | 1 リクエストで要約する件数 |

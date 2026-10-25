@@ -115,3 +115,16 @@ def test_build_prompt_embeds_known_and_articles():
     p = build.build_prompt([{"id": "n1"}], [], [{"id": "k1", "title": "既出"}])
     assert "k1" in p and "n1" in p
     assert "__KNOWN__" not in p and "__ARTICLES__" not in p
+
+
+def test_fetch_retries_failed_article_beyond_max_age(fake_feed):
+    now = datetime.now(timezone.utc)
+    fake_feed([
+        _entry("http://x/failed", now - timedelta(hours=100)),  # 48h 超だが失敗中
+        _entry("http://x/other-old", now - timedelta(hours=100)),
+        _entry("http://x/too-old", now - timedelta(days=20)),  # retention_days(14) 超
+    ])
+    failed = build.hashlib.sha1(b"http://x/failed").hexdigest()[:16]
+    too_old = build.hashlib.sha1(b"http://x/too-old").hexdigest()[:16]
+    items = build.fetch_new_articles(CFG, set(), frozenset({failed, too_old}))
+    assert [a["url"] for a in items] == ["http://x/failed"]
