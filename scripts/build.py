@@ -99,10 +99,15 @@ def load_state(passcode: str) -> dict:
         )
 
 
-def fetch_new_articles(cfg: dict, seen_ids: set) -> list:
-    """RSS から未取得の記事を集める"""
+def fetch_new_articles(cfg: dict, seen_ids: set, retry_ids: frozenset = frozenset()) -> list:
+    """RSS から未取得の記事を集める
+
+    retry_ids(要約に失敗中の記事)は max_age_hours を超えていても、
+    retention_days の範囲なら再び対象にする。
+    """
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=cfg.get("max_age_hours", 48))
+    retry_cutoff = now - timedelta(days=cfg.get("retention_days", 14))
     found = {}
     socket.setdefaulttimeout(30)  # 応答しないフィードで固まらないようにする
     for feed in cfg["feeds"]:
@@ -120,7 +125,7 @@ def fetch_new_articles(cfg: dict, seen_ids: set) -> list:
                 continue
             ts = entry.get("published_parsed") or entry.get("updated_parsed")
             published = datetime(*ts[:6], tzinfo=timezone.utc) if ts else now
-            if published < cutoff:
+            if published < cutoff and not (aid in retry_ids and published >= retry_cutoff):
                 continue
             text = re.sub(r"<[^>]+>", " ", entry.get("summary", ""))
             text = re.sub(r"\s+", " ", text).strip()[:1000]
@@ -261,7 +266,8 @@ def main() -> None:
         print(f"試行上限に達して見送り中: {len(given_up)} 件")
     seen = {a["id"] for a in articles} | given_up
 
-    new_items = fetch_new_articles(cfg, seen)
+    retry_ids = frozenset(failures) - given_up
+    new_items = fetch_new_articles(cfg, seen, retry_ids)
     print(f"新規候補: {len(new_items)} 件")
     if not new_items:
         print("新規記事なし。data.enc.json は更新しません。")
