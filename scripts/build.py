@@ -272,9 +272,7 @@ def build_report(stats: dict) -> str:
         lines.append("- 記事を取得できなかったフィード: " + "、".join(stats["empty_feeds"]))
     if is_alert(stats):
         lines += ["", "**⚠ 要約が全件失敗、または全フィードが空でした。ログを確認してください。**"]
-    return "
-".join(lines) + "
-"
+    return "\n".join(lines) + "\n"
 
 
 def write_report(stats: dict) -> None:
@@ -286,8 +284,7 @@ def write_report(stats: dict) -> None:
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         with open(output, "a", encoding="utf-8") as f:
-            f.write(f"alert={'true' if is_alert(stats) else 'false'}
-")
+            f.write(f"alert={'true' if is_alert(stats) else 'false'}\n")
 
 
 def main() -> None:
