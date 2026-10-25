@@ -32,6 +32,7 @@ jobs:
       - run: pip install -r requirements.txt
 
       - name: 記事取得・要約・暗号化
+        id: build
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           APP_PASSCODE: ${{ secrets.APP_PASSCODE }}
@@ -57,3 +58,10 @@ jobs:
 
       - id: deployment
         uses: actions/deploy-pages@v4
+
+      # 要約全滅・全フィード空のとき、コミットとデプロイを終えてからジョブを失敗させ、通知で気づけるようにする
+      - name: 異常を通知(ジョブを失敗させる)
+        if: steps.build.outputs.alert == 'true'
+        run: |
+          echo "::error::要約が全件失敗、または全フィードが空でした。ジョブサマリーとログを確認してください。"
+          exit 1

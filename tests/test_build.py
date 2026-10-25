@@ -128,3 +128,46 @@ def test_fetch_retries_failed_article_beyond_max_age(fake_feed):
     too_old = build.hashlib.sha1(b"http://x/too-old").hexdigest()[:16]
     items = build.fetch_new_articles(CFG, set(), frozenset({failed, too_old}))
     assert [a["url"] for a in items] == ["http://x/failed"]
+
+
+def _stats(**kw):
+    base = {"feeds": 5, "empty_feeds": [], "candidates": 3,
+            "added": 0, "failed": 0, "given_up": 0}
+    return {**base, **kw}
+
+
+def test_is_alert_when_all_summaries_failed():
+    assert build.is_alert(_stats(failed=3, added=0))
+    assert not build.is_alert(_stats(failed=2, added=1))  # 一部成功は異常にしない
+    assert not build.is_alert(_stats(candidates=0))  # 新規なし
+
+
+def test_is_alert_when_all_feeds_empty():
+    names = ["a", "b", "c", "d", "e"]
+    assert build.is_alert(_stats(empty_feeds=names, candidates=0))
+    assert not build.is_alert(_stats(empty_feeds=names[:1], candidates=0))  # 1 本だけは警告止まり
+
+
+def test_write_report_outputs_flag_and_summary(tmp_path, monkeypatch):
+    summary, output = tmp_path / "summary.md", tmp_path / "output.txt"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    build.write_report(_stats(failed=2, empty_feeds=["TechCrunch AI"]))
+    assert "alert=true" in output.read_text(encoding="utf-8")
+    text = summary.read_text(encoding="utf-8")
+    assert "失敗 2 件" in text and "TechCrunch AI" in text
+
+
+def test_write_report_is_noop_outside_actions(monkeypatch):
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    build.write_report(_stats())  # 例外にならなければよい
+
+
+def test_fetch_reports_empty_feeds(monkeypatch):
+    monkeypatch.setattr(
+        build.feedparser, "parse", lambda url, agent=None: SimpleNamespace(entries=[])
+    )
+    empty = []
+    assert build.fetch_new_articles(CFG, set(), empty_feeds=empty) == []
+    assert empty == ["F"]

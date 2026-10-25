@@ -99,11 +99,17 @@ def load_state(passcode: str) -> dict:
         )
 
 
-def fetch_new_articles(cfg: dict, seen_ids: set, retry_ids: frozenset = frozenset()) -> list:
+def fetch_new_articles(
+    cfg: dict,
+    seen_ids: set,
+    retry_ids: frozenset = frozenset(),
+    empty_feeds: list | None = None,
+) -> list:
     """RSS から未取得の記事を集める
 
     retry_ids(要約に失敗中の記事)は max_age_hours を超えていても、
     retention_days の範囲なら再び対象にする。
+    記事を取れなかったフィード名は empty_feeds に追加する。
     """
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=cfg.get("max_age_hours", 48))
@@ -115,6 +121,8 @@ def fetch_new_articles(cfg: dict, seen_ids: set, retry_ids: frozenset = frozense
         parsed = feedparser.parse(feed["url"], agent="ai-news-bot/1.0")
         if not parsed.entries:
             print(f"[警告] 記事なし/取得失敗: {feed['name']}")
+            if empty_feeds is not None:
+                empty_feeds.append(feed["name"])
             continue
         for entry in parsed.entries[: cfg.get("per_feed_limit", 10)]:
             url = entry.get("link")
@@ -244,13 +252,60 @@ def summarize_batch(
     return {}
 
 
+def is_alert(stats: dict) -> bool:
+    """要約が全件失敗、または全フィードが空のとき True"""
+    all_failed = stats["failed"] > 0 and stats["added"] == 0
+    all_feeds_empty = stats["feeds"] > 0 and len(stats["empty_feeds"]) == stats["feeds"]
+    return all_failed or all_feeds_empty
+
+
+def build_report(stats: dict) -> str:
+    """ジョブサマリー(Markdown)を作る"""
+    lines = [
+        "## 実行結果",
+        "",
+        f"- 新規候補: {stats['candidates']} 件",
+        f"- 要約: 成功 {stats['added']} 件 / 失敗 {stats['failed']} 件",
+        f"- 試行上限で見送り中: {stats['given_up']} 件",
+    ]
+    if stats["empty_feeds"]:
+        lines.append("- 記事を取得できなかったフィード: " + "、".join(stats["empty_feeds"]))
+    if is_alert(stats):
+        lines += ["", "**⚠ 要約が全件失敗、または全フィードが空でした。ログを確認してください。**"]
+    return "\n".join(lines) + "\n"
+
+
+def write_report(stats: dict) -> None:
+    """GitHub Actions 上なら、ジョブサマリーと異常フラグを書き出す(ローカルでは何もしない)"""
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write(build_report(stats))
+    output = os.environ.get("GITHUB_OUTPUT")
+    if output:
+        with open(output, "a", encoding="utf-8") as f:
+            f.write(f"alert={'true' if is_alert(stats) else 'false'}\n")
+
+
 def main() -> None:
+    stats = {
+        "feeds": 0, "empty_feeds": [], "candidates": 0,
+        "added": 0, "failed": 0, "given_up": 0,
+    }
+    try:
+        run(stats)
+    finally:
+        write_report(stats)
+
+
+def run(stats: dict) -> None:
     api_key = os.environ.get("GEMINI_API_KEY")
     passcode = os.environ.get("APP_PASSCODE")
     if not api_key or not passcode:
         sys.exit("環境変数 GEMINI_API_KEY / APP_PASSCODE が未設定です。")
 
     cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    stats["feeds"] = len(cfg["feeds"])
     state = load_state(passcode)
     articles = state.get("articles", [])
     now = datetime.now(timezone.utc)
@@ -262,12 +317,14 @@ def main() -> None:
     failures_before = json.dumps(failures, sort_keys=True)
     max_attempts = cfg.get("max_summary_attempts", 3)
     given_up = {k for k, v in failures.items() if v["count"] >= max_attempts}
+    stats["given_up"] = len(given_up)
     if given_up:
         print(f"試行上限に達して見送り中: {len(given_up)} 件")
     seen = {a["id"] for a in articles} | given_up
 
     retry_ids = frozenset(failures) - given_up
-    new_items = fetch_new_articles(cfg, seen, retry_ids)
+    new_items = fetch_new_articles(cfg, seen, retry_ids, stats["empty_feeds"])
+    stats["candidates"] = len(new_items)
     print(f"新規候補: {len(new_items)} 件")
     if not new_items:
         print("新規記事なし。data.enc.json は更新しません。")
@@ -320,6 +377,7 @@ def main() -> None:
             added += 1
         time.sleep(5)  # RPM 対策の間隔
 
+    stats["added"], stats["failed"] = added, failed
     print(f"要約結果: 成功 {added} 件 / 失敗 {failed} 件", flush=True)
     for aid, f in failures.items():
         if f["count"] >= max_attempts and aid not in given_up:
