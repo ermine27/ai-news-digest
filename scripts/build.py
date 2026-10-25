@@ -182,14 +182,13 @@ def resolve_dup_of(batch: list, result: dict, known_ids: set) -> dict:
     return roots
 
 
-def summarize_batch(client, model: str, batch: list, interests: list, known: list) -> dict:
-    """記事のまとまりを 1 リクエストで要約・翻訳・採点する。失敗時は空辞書"""
-    payload = [
-        {"id": a["id"], "title": a["title"], "text": a["text"], "source": a["source"]}
-        for a in batch
-    ]
-    prompt = build_prompt(payload, interests, known)
-    for attempt in range(4):
+class PermanentError(Exception):
+    """再試行しても解消しない API エラー(モデルID・APIキーの誤りなど)"""
+
+
+def call_model(client, model: str, prompt: str, attempts: int) -> dict | None:
+    """1 つのモデルを上限付きでリトライして呼ぶ。一時エラーで尽きたら None"""
+    for attempt in range(attempts):
         try:
             resp = client.models.generate_content(
                 model=model,
@@ -202,10 +201,41 @@ def summarize_batch(client, model: str, batch: list, interests: list, known: lis
             return {i["id"]: i for i in items if isinstance(i, dict) and "id" in i}
         except Exception as exc:  # 429・JSON不正などを含めて再試行する
             if getattr(exc, "code", None) in (400, 401, 403, 404):
-                sys.exit(f"[エラー] 再試行しても解消しない失敗です（モデルID・APIキーを確認）: {exc}")
+                raise PermanentError(str(exc)) from exc
             wait = 20 * (attempt + 1)
-            print(f"[警告] 要約失敗({attempt + 1}/4): {exc} → {wait}秒待機")
+            print(f"[警告] 要約失敗 {model} ({attempt + 1}/{attempts}): {exc} → {wait}秒待機")
             time.sleep(wait)
+    return None
+
+
+def summarize_batch(
+    client, model: str, batch: list, interests: list, known: list, fallback_models=()
+) -> dict:
+    """記事のまとまりを 1 リクエストで要約・翻訳・採点する。失敗時は空辞書
+
+    主モデルが一時エラーで尽きたときだけ fallback_models を順に試す。
+    主モデルの永続エラーは即失敗、フォールバック側の永続エラーは警告して次へ進む。
+    """
+    payload = [
+        {"id": a["id"], "title": a["title"], "text": a["text"], "source": a["source"]}
+        for a in batch
+    ]
+    prompt = build_prompt(payload, interests, known)
+    try:
+        result = call_model(client, model, prompt, 4)
+    except PermanentError as exc:
+        sys.exit(f"[エラー] 再試行しても解消しない失敗です（モデルID・APIキーを確認）: {exc}")
+    if result is not None:
+        return result
+    for fb in fallback_models:
+        print(f"[警告] {model} が失敗し続けたため {fb} で再試行します", flush=True)
+        try:
+            result = call_model(client, fb, prompt, 2)
+        except PermanentError as exc:
+            print(f"[警告] フォールバック {fb} は使えません（モデルIDを確認）: {exc}")
+            continue
+        if result is not None:
+            return result
     return {}
 
 
@@ -248,7 +278,12 @@ def main() -> None:
         print(f"要約中: {i + 1}〜{i + len(chunk)} 件目", flush=True)
         known = known_for_dedup(articles, cfg.get("dedup_window_hours", 72))
         result = summarize_batch(
-            client, cfg["model"], chunk, cfg.get("interests") or [], known
+            client,
+            cfg["model"],
+            chunk,
+            cfg.get("interests") or [],
+            known,
+            cfg.get("fallback_models") or [],
         )
         dups = resolve_dup_of(chunk, result, {k["id"] for k in known})
         for a in chunk:

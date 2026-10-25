@@ -1,6 +1,10 @@
 # 使用モデル（ID は要確認。確認コマンドは手順書の「4. 作業手順」を参照）
 model: gemini-3.8-flash
 
+# 主モデルが 503/504 などで失敗し続けたときに順に試すモデル(空なら使わない)
+# ID は推測せず、README の確認コマンドで API のモデル一覧から選ぶ [要確認]
+fallback_models: []
+
 # 取得対象フィード（HTTP 200 を確認済みの RSS/Atom）
 feeds:
   - name: OpenAI News
