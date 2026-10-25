@@ -55,9 +55,11 @@ flowchart LR
 ```
 .
 ├─ .github/workflows/update.yml   # 毎朝 9:30 JST の自動実行
+├─ .github/workflows/test.yml     # push / PR で pytest
 ├─ config.yml                     # フィード・モデル・取得件数の設定
 ├─ requirements.txt
 ├─ scripts/build.py               # 取得・要約・暗号化
+├─ tests/test_build.py            # 暗号化・取得・要約ロジックのテスト
 └─ docs/
    ├─ index.html                  # 閲覧画面(Pages で配信)
    ├─ manifest.json, sw.js, icon-*.png  # PWA(ホーム画面に追加・オフライン閲覧)
@@ -70,13 +72,13 @@ PWA: Service Worker は公開済みの静的ファイルと暗号化データだ
 
 | キー | 既定値 | 説明 |
 |---|---|---|
-| `model` | `gemini-2.5-flash` | 使用モデル。有効な ID は要確認 |
+| `model` | `gemini-3.8-flash` | 使用モデル。有効な ID は下記の確認コマンドで一覧し、推測で書かない **[要確認]** |
 | `fallback_models` | `[]` | 主モデルが一時エラーで失敗し続けたときに順に試すモデル ID。未設定なら使わない |
 | `feeds` | (要設定) | `name` と `url` のリスト |
 | `max_age_hours` | 48 | 公開から何時間以内の記事を対象にするか。要約に失敗中の記事は `retention_days` の範囲で再試行する |
 | `per_feed_limit` | 10 | 1 フィードあたりの最大取得件数 |
 | `max_new_per_run` | 30 | 1 回の実行で要約する最大件数 |
-| `batch_size` | 10 | 1 リクエストで要約する件数 |
+| `batch_size` | 5 | 1 リクエストで要約する件数 |
 | `retention_days` | 14 | 記事の保持日数 |
 | `dedup_window_hours` | 72 | 同一ニュースの重複判定で、候補にする既出記事の期間(時間) |
 | `max_summary_attempts` | 3 | 要約に失敗した記事を再試行する実行回数の上限。超えた記事は見送る |
