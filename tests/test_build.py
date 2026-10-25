@@ -171,3 +171,182 @@ def test_fetch_reports_empty_feeds(monkeypatch):
     empty = []
     assert build.fetch_new_articles(CFG, set(), empty_feeds=empty) == []
     assert empty == ["F"]
+
+
+# ---- summarize_batch / main() を偽の Gemini クライアントで確認する ----
+
+class FakeErr(Exception):
+    def __init__(self, code):
+        super().__init__(f"fake error {code}")
+        self.code = code
+
+
+class FakeClient:
+    """モデルごとに用意した応答を順に返す。Exception ならそのまま送出する"""
+
+    def __init__(self, script):
+        self.script = {k: list(v) for k, v in script.items()}
+        self.calls = []
+        self.models = self
+
+    def generate_content(self, model, contents, config):
+        self.calls.append(model)
+        step = self.script[model].pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return SimpleNamespace(text=step)
+
+
+def ok_json(*ids, dup_of=None):
+    return build.json.dumps(
+        [{"id": i, "title_ja": "T-" + i, "summary_ja": "S", "stars": 3,
+          "dup_of": (dup_of or {}).get(i)} for i in ids],
+        ensure_ascii=False,
+    )
+
+
+def aid(url):
+    return build.hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
+
+
+BATCH = [{"id": "a1", "title": "t", "text": "x", "source": "S"}]
+
+
+@pytest.fixture(autouse=True)
+def no_sleep(monkeypatch):
+    monkeypatch.setattr(build.time, "sleep", lambda s: None)
+
+
+def test_summarize_retries_transient_error_then_succeeds():
+    client = FakeClient({"m": [FakeErr(504), ok_json("a1")]})
+    result = build.summarize_batch(client, "m", BATCH, [], [])
+    assert "a1" in result
+    assert client.calls == ["m", "m"]
+
+
+def test_summarize_retries_invalid_json():
+    client = FakeClient({"m": ["これはJSONではない", ok_json("a1")]})
+    assert "a1" in build.summarize_batch(client, "m", BATCH, [], [])
+
+
+def test_summarize_fails_fast_on_permanent_error():
+    client = FakeClient({"m": [FakeErr(404)]})
+    with pytest.raises(SystemExit):
+        build.summarize_batch(client, "m", BATCH, [], [])
+    assert client.calls == ["m"]  # 再試行しない
+
+
+def test_summarize_returns_empty_when_all_attempts_fail():
+    client = FakeClient({"m": [FakeErr(503)] * 4})
+    assert build.summarize_batch(client, "m", BATCH, [], []) == {}
+    assert client.calls == ["m"] * 4
+
+
+def test_summarize_uses_fallback_after_primary_exhausted():
+    client = FakeClient({"m": [FakeErr(503)] * 4, "fb": [ok_json("a1")]})
+    result = build.summarize_batch(client, "m", BATCH, [], [], ["fb"])
+    assert "a1" in result
+    assert client.calls == ["m"] * 4 + ["fb"]
+
+
+def test_summarize_skips_unusable_fallback_and_tries_next():
+    client = FakeClient({
+        "m": [FakeErr(504)] * 4,
+        "bad": [FakeErr(404)],  # 存在しないモデル ID: 警告して次へ
+        "fb2": [ok_json("a1")],
+    })
+    result = build.summarize_batch(client, "m", BATCH, [], [], ["bad", "fb2"])
+    assert "a1" in result
+    assert client.calls == ["m"] * 4 + ["bad", "fb2"]
+
+
+def test_summarize_does_not_use_fallback_for_primary_permanent_error():
+    client = FakeClient({"m": [FakeErr(401)], "fb": [ok_json("a1")]})
+    with pytest.raises(SystemExit):
+        build.summarize_batch(client, "m", BATCH, [], [], ["fb"])
+    assert client.calls == ["m"]
+
+
+PASS = "pw-for-test"
+URLS = ["http://x/1", "http://x/2"]
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    """build.main() を tmp_path 上で動かす準備。run(client) で 1 回実行する"""
+    cfg = {
+        "model": "m",
+        "feeds": [{"name": "F", "url": "http://example.invalid/feed"}],
+        "batch_size": 5,
+        "max_summary_attempts": 2,
+    }
+    cfg_path = tmp_path / "config.yml"
+    cfg_path.write_text(build.yaml.safe_dump(cfg), encoding="utf-8")
+    data_path = tmp_path / "docs" / "data.enc.json"
+    github_output = tmp_path / "output.txt"
+    monkeypatch.setattr(build, "CONFIG_PATH", cfg_path)
+    monkeypatch.setattr(build, "DATA_PATH", data_path)
+    monkeypatch.setattr(build, "PBKDF2_ITERATIONS", 1000)  # テストを速くする
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setenv("APP_PASSCODE", PASS)
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    now = datetime.now(timezone.utc)
+    entries = [_entry(u, now - timedelta(hours=1 + i)) for i, u in enumerate(URLS)]
+    monkeypatch.setattr(
+        build.feedparser, "parse",
+        lambda url, agent=None: SimpleNamespace(entries=entries),
+    )
+
+    def run(client):
+        monkeypatch.setattr(build.genai, "Client", lambda **kw: client)
+        github_output.write_text("", encoding="utf-8")
+        build.main()
+
+    def state():
+        return build.decrypt(build.json.loads(data_path.read_text(encoding="utf-8")), PASS)
+
+    return SimpleNamespace(run=run, state=state, data_path=data_path, output=github_output)
+
+
+def test_main_records_failures_and_raises_alert(env):
+    env.run(FakeClient({"m": [FakeErr(504)] * 4}))
+    st = env.state()
+    assert st["articles"] == []  # 失敗した記事は保存しない
+    assert {v["count"] for v in st["failures"].values()} == {1}
+    assert set(st["failures"]) == {aid(u) for u in URLS}
+    assert "alert=true" in env.output.read_text(encoding="utf-8")
+
+
+def test_main_gives_up_after_max_attempts(env):
+    for _ in range(2):  # max_summary_attempts = 2
+        env.run(FakeClient({"m": [FakeErr(504)] * 4}))
+    assert {v["count"] for v in env.state()["failures"].values()} == {2}
+    before = env.data_path.read_bytes()
+    client = FakeClient({"m": []})
+    env.run(client)  # 見送り対象は候補から外れ、API も呼ばない
+    assert client.calls == []
+    assert env.data_path.read_bytes() == before
+
+
+def test_main_success_clears_failures_and_stores_dup_of(env):
+    env.run(FakeClient({"m": [FakeErr(504)] * 4}))  # まず失敗を記録
+    ids = [aid(u) for u in URLS]
+    # 新しい順なので ids[0] が先頭。ids[1] は ids[0] の重複として返す
+    env.run(FakeClient({"m": [ok_json(*ids, dup_of={ids[1]: ids[0]})]}))
+    st = env.state()
+    assert st["failures"] == {}
+    by_id = {a["id"]: a for a in st["articles"]}
+    assert set(by_id) == set(ids)
+    assert "dup_of" not in by_id[ids[0]]
+    assert by_id[ids[1]]["dup_of"] == ids[0]
+    assert "alert=false" in env.output.read_text(encoding="utf-8")
+
+
+def test_main_partial_failure_is_not_alert(env):
+    ids = [aid(u) for u in URLS]
+    env.run(FakeClient({"m": [ok_json(ids[0])]}))  # 2 件目は応答に含まれず失敗扱い
+    st = env.state()
+    assert [a["id"] for a in st["articles"]] == [ids[0]]
+    assert set(st["failures"]) == {ids[1]}
+    assert "alert=false" in env.output.read_text(encoding="utf-8")
