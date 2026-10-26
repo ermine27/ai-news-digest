@@ -1,6 +1,6 @@
-# AI News Digest
+# Tech Digest
 
-RSS を取得し、Gemini で日本語要約・採点し、AES-GCM で暗号化して GitHub Pages で配信する個人用アプリ。設計判断・構成図は [DeploymentGuide.md](DeploymentGuide.md)、使い方は [README.md](README.md) を参照。
+AI・セキュリティー・プログラミングの技術ニュースについて、RSS を取得し、Gemini で日本語要約・採点し、AES-GCM で暗号化して GitHub Pages で配信する個人用アプリ。設計判断・構成図は [DeploymentGuide.md](DeploymentGuide.md)、使い方は [README.md](README.md) を参照。
 
 ## 構成
 

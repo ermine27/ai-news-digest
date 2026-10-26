@@ -1,4 +1,4 @@
-"""AIニュースの取得・要約・暗号化スクリプト"""
+"""技術ニュースの取得・要約・暗号化スクリプト"""
 import base64
 import hashlib
 import json
