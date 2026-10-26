@@ -63,6 +63,7 @@ details a{font-size:13px;font-weight:400;margin:2px 0 2px 12px;color:var(--accen
     </nav>
     <div id="filters">
       <input id="q" type="search" placeholder="キーワード" aria-label="キーワード検索">
+      <select id="cat" aria-label="カテゴリー" hidden><option value="">全カテゴリー</option></select>
       <select id="src" aria-label="ソース"><option value="">全ソース</option></select>
       <select id="minStars" aria-label="注目度">
         <option value="1">★1以上</option>
@@ -124,15 +125,33 @@ function groupDuplicates() {
   return { primaries, related };
 }
 
+const catOf = (a) => a.category || "その他";
+
 function visibleArticles() {
   const q = $("#q").value.trim().toLowerCase();
+  const cat = $("#cat").value;
   const src = $("#src").value;
   const min = Number($("#minStars").value);
   return groupDuplicates().primaries.filter((a) =>
     (tab === "all" ? true : tab === "read" ? readSet.has(a.id) : !readSet.has(a.id)) &&
+    (!cat || catOf(a) === cat) &&
     (!src || a.source === src) &&
     a.stars >= min &&
     (!q || (a.title + " " + a.summary).toLowerCase().includes(q)));
+}
+
+// データ中のカテゴリー名から選択肢を作る(カテゴリーが 1 種類以下なら隠す)
+function fillCategories() {
+  const sel = $("#cat");
+  sel.replaceChildren(sel.options[0]);
+  const names = [...new Set(articles.map(catOf))].sort();
+  for (const name of names) {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    sel.append(opt);
+  }
+  sel.hidden = names.length < 2;
 }
 
 // データ中のソース名からセレクトの選択肢を作る
@@ -165,7 +184,7 @@ function render() {
     const info = document.createElement("span");
     const d = new Date(a.published).toLocaleString("ja-JP",
       { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
-    info.textContent = a.source + " / " + d;
+    info.textContent = (a.category ? a.category + " / " : "") + a.source + " / " + d;
     row.append(stars, info);
 
     const link = document.createElement("a");
@@ -226,6 +245,7 @@ async function unlock(passcode, remember) {
   saveRead(readSet);
   if (remember) { try { localStorage.setItem(PASS_KEY, passcode); } catch (e) { /* 無視 */ } }
   $("#meta").textContent = "更新: " + new Date(data.updated).toLocaleString("ja-JP");
+  fillCategories();
   fillSources();
   $("#lock").hidden = true;
   $("#app").hidden = false;
@@ -250,7 +270,7 @@ document.querySelectorAll(".tab").forEach((b) =>
     render();
   }));
 
-["#q", "#src", "#minStars"].forEach((s) =>
+["#q", "#cat", "#src", "#minStars"].forEach((s) =>
   $(s).addEventListener(s === "#q" ? "input" : "change", render));
 
 $("#markAll").addEventListener("click", () => {
