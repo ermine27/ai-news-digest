@@ -99,6 +99,28 @@ def load_state(passcode: str) -> dict:
         )
 
 
+def matches_filters(feed: dict, title: str, text: str) -> bool:
+    """feed の include(いずれかを含む)と exclude(どれも含まない)で記事を絞る(大小文字は無視)"""
+    haystack = (title + " " + text).lower()
+    include = [str(k).lower() for k in feed.get("include") or []]
+    exclude = [str(k).lower() for k in feed.get("exclude") or []]
+    if include and not any(k in haystack for k in include):
+        return False
+    return not any(k in haystack for k in exclude)
+
+
+def round_robin(lists: list, limit: int) -> list:
+    """各リストの先頭から順に 1 件ずつ取り、limit 件まで集める(1 つのフィードが枠を独占しない)"""
+    picked = []
+    depth = 0
+    while len(picked) < limit and any(depth < len(l) for l in lists):
+        for l in lists:
+            if depth < len(l) and len(picked) < limit:
+                picked.append(l[depth])
+        depth += 1
+    return picked
+
+
 def fetch_new_articles(
     cfg: dict,
     seen_ids: set,
@@ -110,11 +132,14 @@ def fetch_new_articles(
     retry_ids(要約に失敗中の記事)は max_age_hours を超えていても、
     retention_days の範囲なら再び対象にする。
     記事を取れなかったフィード名は empty_feeds に追加する。
+    フィードごとに include / exclude で絞り、limit 件(未指定は per_feed_limit)までに抑え、
+    全体は max_new_per_run まで各フィードから均等に集める。
     """
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=cfg.get("max_age_hours", 48))
     retry_cutoff = now - timedelta(days=cfg.get("retention_days", 14))
-    found = {}
+    found_ids = set()
+    per_feed = []
     socket.setdefaulttimeout(30)  # 応答しないフィードで固まらないようにする
     for feed in cfg["feeds"]:
         print(f"取得中: {feed['name']}", flush=True)
@@ -124,12 +149,13 @@ def fetch_new_articles(
             if empty_feeds is not None:
                 empty_feeds.append(feed["name"])
             continue
+        picked = []
         for entry in parsed.entries[: cfg.get("per_feed_limit", 10)]:
             url = entry.get("link")
             if not url:
                 continue
             aid = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
-            if aid in seen_ids or aid in found:
+            if aid in seen_ids or aid in found_ids:
                 continue
             ts = entry.get("published_parsed") or entry.get("updated_parsed")
             published = datetime(*ts[:6], tzinfo=timezone.utc) if ts else now
@@ -137,16 +163,24 @@ def fetch_new_articles(
                 continue
             text = re.sub(r"<[^>]+>", " ", entry.get("summary", ""))
             text = re.sub(r"\s+", " ", text).strip()[:1000]
-            found[aid] = {
-                "id": aid,
-                "url": url,
-                "source": feed["name"],
-                "title": entry.get("title", "(no title)"),
-                "text": text,
-                "published": published.isoformat(),
-            }
-    articles = sorted(found.values(), key=lambda a: a["published"], reverse=True)
-    return articles[: cfg.get("max_new_per_run", 30)]
+            title = entry.get("title", "(no title)")
+            if not matches_filters(feed, title, text):
+                continue
+            found_ids.add(aid)
+            picked.append(
+                {
+                    "id": aid,
+                    "url": url,
+                    "source": feed["name"],
+                    "title": title,
+                    "text": text,
+                    "published": published.isoformat(),
+                }
+            )
+        picked.sort(key=lambda a: a["published"], reverse=True)
+        per_feed.append(picked[: feed.get("limit", cfg.get("per_feed_limit", 10))])
+    articles = round_robin(per_feed, cfg.get("max_new_per_run", 30))
+    return sorted(articles, key=lambda a: a["published"], reverse=True)
 
 
 def build_prompt(payload: list, interests: list, known: list) -> str:
