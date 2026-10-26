@@ -475,3 +475,38 @@ def test_real_config_interests_match_feed_categories():
     if isinstance(interests, dict):
         categories = {f["category"] for f in cfg["feeds"] if f.get("category")}
         assert set(interests) <= categories  # 該当フィードのないカテゴリーの関心領域を書かない
+
+
+def test_data_too_big_only_warns_above_threshold():
+    assert not build.data_too_big({"data_kb": None})
+    assert not build.data_too_big({"data_kb": 2000, "max_data_kb": 2000})
+    assert build.data_too_big({"data_kb": 2001, "max_data_kb": 2000})
+    assert build.data_too_big({"data_kb": 3000})  # 閾値の既定は 2000 KB
+    # 警告だけで、異常(ジョブ失敗)にはしない
+    assert not build.is_alert(_stats(data_kb=99999, max_data_kb=10))
+
+
+def test_build_report_shows_calls_and_data_size():
+    text = build.build_report(_stats(api_calls=7, data_kb=123, articles=45, max_data_kb=2000))
+    assert "Gemini 呼び出し: 7 回" in text
+    assert "123 KB" in text and "記事 45 件" in text
+    assert "閾値を超えました" not in text
+    big = build.build_report(_stats(data_kb=5000, max_data_kb=2000))
+    assert "閾値を超えました" in big
+
+
+def test_main_counts_api_calls_including_retries_and_fallback(env, tmp_path):
+    summary = tmp_path / "summary.md"
+    ids = [aid(u) for u in URLS]
+    cfg = build.yaml.safe_load(build.CONFIG_PATH.read_text(encoding="utf-8"))
+    cfg["fallback_models"] = ["fb"]
+    build.CONFIG_PATH.write_text(build.yaml.safe_dump(cfg), encoding="utf-8")
+    import os
+    os.environ["GITHUB_STEP_SUMMARY"] = str(summary)
+    try:
+        env.run(FakeClient({"m": [FakeErr(503)] * 4, "fb": [ok_json(*ids)]}))
+    finally:
+        del os.environ["GITHUB_STEP_SUMMARY"]
+    text = summary.read_text(encoding="utf-8")
+    assert "Gemini 呼び出し: 5 回" in text  # 主モデル 4 回 + フォールバック 1 回
+    assert "KB" in text
