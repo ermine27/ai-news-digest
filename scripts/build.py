@@ -23,6 +23,8 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.yml"
 DATA_PATH = ROOT / "docs" / "data.enc.json"
 PBKDF2_ITERATIONS = 600_000  # index.html 側は data.enc.json の iter を参照する
+DEFAULT_MAX_DATA_KB = 2000  # data.enc.json がこれを超えたらサマリーで警告する(config の max_data_kb で変更)
+api_calls = 0  # この実行での Gemini 呼び出し回数(リトライ・フォールバックを含む)
 
 PROMPT = """あなたは技術ニュース（AI・セキュリティー・プログラミングなど）の編集者です。
 以下のJSON配列の各記事について、日本語で次の項目を持つJSON配列だけを返してください。
@@ -259,7 +261,9 @@ class PermanentError(Exception):
 
 def call_model(client, model: str, prompt: str, attempts: int) -> dict | None:
     """1 つのモデルを上限付きでリトライして呼ぶ。一時エラーで尽きたら None"""
+    global api_calls
     for attempt in range(attempts):
+        api_calls += 1
         try:
             resp = client.models.generate_content(
                 model=model,
@@ -323,6 +327,12 @@ def is_alert(stats: dict) -> bool:
     return all_failed or all_feeds_empty
 
 
+def data_too_big(stats: dict) -> bool:
+    """データサイズが閾値を超えたとき True(警告のみで、ジョブは失敗させない)"""
+    size = stats.get("data_kb")
+    return size is not None and size > stats.get("max_data_kb", DEFAULT_MAX_DATA_KB)
+
+
 def build_report(stats: dict) -> str:
     """ジョブサマリー(Markdown)を作る"""
     lines = [
@@ -331,9 +341,17 @@ def build_report(stats: dict) -> str:
         f"- 新規候補: {stats['candidates']} 件",
         f"- 要約: 成功 {stats['added']} 件 / 失敗 {stats['failed']} 件",
         f"- 試行上限で見送り中: {stats['given_up']} 件",
+        f"- Gemini 呼び出し: {stats.get('api_calls', 0)} 回(リトライ・フォールバックを含む)",
     ]
+    if stats.get("data_kb") is not None:
+        lines.append(
+            f"- データ: {stats['data_kb']} KB / 記事 {stats.get('articles', 0)} 件"
+            f"(警告の閾値 {stats.get('max_data_kb', DEFAULT_MAX_DATA_KB)} KB)"
+        )
     if stats["empty_feeds"]:
         lines.append("- 記事を取得できなかったフィード: " + "、".join(stats["empty_feeds"]))
+    if data_too_big(stats):
+        lines += ["", "**⚠ データサイズが閾値を超えました。retention_days や max_new_per_run を見直してください。**"]
     if is_alert(stats):
         lines += ["", "**⚠ 要約が全件失敗、または全フィードが空でした。ログを確認してください。**"]
     return "\n".join(lines) + "\n"
@@ -356,9 +374,13 @@ def main() -> None:
         "feeds": 0, "empty_feeds": [], "candidates": 0,
         "added": 0, "failed": 0, "given_up": 0,
     }
+    start_calls = api_calls
     try:
         run(stats)
     finally:
+        stats["api_calls"] = api_calls - start_calls
+        if DATA_PATH.exists():
+            stats["data_kb"] = round(DATA_PATH.stat().st_size / 1024)
         write_report(stats)
 
 
@@ -370,8 +392,10 @@ def run(stats: dict) -> None:
 
     cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
     stats["feeds"] = len(cfg["feeds"])
+    stats["max_data_kb"] = cfg.get("max_data_kb", DEFAULT_MAX_DATA_KB)
     state = load_state(passcode)
     articles = state.get("articles", [])
+    stats["articles"] = len(articles)
     now = datetime.now(timezone.utc)
     keep_from = (now - timedelta(days=cfg.get("retention_days", 14))).isoformat()
     # 要約に失敗した記事の試行回数（記事本体は保存しない）。保持期間を過ぎたら捨てる
@@ -463,6 +487,7 @@ def run(stats: dict) -> None:
     }
     DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     DATA_PATH.write_text(json.dumps(encrypt(out, passcode)), encoding="utf-8")
+    stats["articles"] = len(articles)
     print(f"追加: {added} 件 / 保持合計: {len(articles)} 件")
 
 

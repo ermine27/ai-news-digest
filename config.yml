@@ -103,5 +103,6 @@ max_new_per_run: 40     # 1 回の実行で要約する最大件数(各フィー
 batch_size: 5           # 1 リクエストで要約する件数
 text_chars: 1200        # 要約の入力にする本文の最大文字数(全文を配信するフィードは全文の先頭を使う)
 retention_days: 14      # 保持日数
+max_data_kb: 2000       # data.enc.json がこのサイズ(KB)を超えたらジョブサマリーで警告する
 dedup_window_hours: 72  # 重複判定の候補にする既出記事の期間(時間)
 max_summary_attempts: 3 # 要約に失敗した記事を再試行する実行回数の上限
