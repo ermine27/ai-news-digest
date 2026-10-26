@@ -8,30 +8,98 @@ fallback_models:
   - gemini-3.7-flash
   - gemini-3.1-flash-lite
 
-# 取得対象フィード（HTTP 200 を確認済みの RSS/Atom）
+# 取得対象フィード（2026-10-26 に HTTP 200 を確認済みの RSS/Atom）
 # 任意項目: category(画面の絞り込み用)、limit(1 回に取る最大件数)、include(いずれかを含む記事だけ)、exclude(含む記事を除く)
 feeds:
+  # --- AI ---
+  - name: ITmedia AI+
+    url: https://rss.itmedia.co.jp/rss/2.0/aiplus.xml
+    category: AI
+    limit: 5
+  - name: Zenn LLM
+    url: https://zenn.dev/topics/llm/feed
+    category: AI
+    limit: 4
   - name: OpenAI News
     url: https://openai.com/news/rss.xml
+    category: AI
+    limit: 2
   - name: Hugging Face Blog
     url: https://huggingface.co/blog/feed.xml
+    category: AI
+    limit: 2
   - name: TechCrunch AI
     url: https://techcrunch.com/category/artificial-intelligence/feed/
+    category: AI
+    limit: 2
   - name: MIT Technology Review AI
     url: https://www.technologyreview.com/topic/artificial-intelligence/feed
+    category: AI
+    limit: 2
   - name: AWS Machine Learning Blog
     url: https://aws.amazon.com/blogs/machine-learning/feed/
+    category: AI
+    limit: 2
+
+  # --- セキュリティー ---
+  - name: ITmedia セキュリティ
+    url: https://rss.itmedia.co.jp/rss/2.0/news_security.xml
+    category: セキュリティー
+    limit: 4
+  - name: JPCERT/CC
+    url: https://www.jpcert.or.jp/rss/jpcert.rdf
+    category: セキュリティー
+    limit: 3
+  - name: IPA セキュリティ情報
+    url: https://www.ipa.go.jp/security/alert-rss.rdf
+    category: セキュリティー
+    limit: 2
+  - name: Zenn セキュリティ
+    url: https://zenn.dev/topics/security/feed
+    category: セキュリティー
+    limit: 3
+  - name: Qiita セキュリティ
+    url: https://qiita.com/tags/security/feed.atom
+    category: セキュリティー
+    limit: 3
+
+  # --- プログラミング ---
+  - name: Publickey
+    url: https://www.publickey1.jp/atom.xml
+    category: プログラミング
+    limit: 4
+  - name: CodeZine
+    url: https://codezine.jp/rss/new/20/index.xml
+    category: プログラミング
+    limit: 3
+  - name: Zenn プログラミング
+    url: https://zenn.dev/topics/programming/feed
+    category: プログラミング
+    limit: 3
+  - name: はてなブックマーク IT
+    url: https://b.hatena.ne.jp/hotentry/it.rss
+    category: プログラミング
+    limit: 3
 
 # 関心領域（注目度の補正に使う。空または削除で従来どおりの採点）
 # リストなら全分野共通。カテゴリー名をキーにした辞書なら分野別にできる
 interests:
-  - LLM の実務活用・開発ツール
-  - AI 規制・政策
-  - 新モデルの発表と性能評価
+  AI:
+    - LLM の実務活用・開発ツール
+    - AI 規制・政策
+    - 新モデルの発表と性能評価
+  セキュリティー:
+    - 広く使われる製品の脆弱性と修正情報
+    - 国内で起きた被害・インシデント
+    - 実務で使える対策
+  プログラミング:
+    - 言語・フレームワークの動向
+    - 設計・開発手法
+    - 開発ツール・クラウド
 
 max_age_hours: 48       # 公開から何時間以内の記事を対象にするか(要約に失敗中の記事は retention_days まで再試行)
 per_feed_limit: 10      # 1 フィードあたり確認する最大件数(フィードごとの limit で、取る件数をさらに絞れる)
-max_new_per_run: 30     # 1 回の実行で要約する最大件数(各フィードから均等に集める)
+max_new_per_run: 40     # 1 回の実行で要約する最大件数(各フィードから均等に集める)
 batch_size: 5           # 1 リクエストで要約する件数
 text_chars: 1200        # 要約の入力にする本文の最大文字数(全文を配信するフィードは全文の先頭を使う)
 retention_days: 14      # 保持日数
