@@ -99,6 +99,18 @@ def load_state(passcode: str) -> dict:
         )
 
 
+def entry_text(entry, limit: int) -> str:
+    """要約の入力にする本文を作る。全文(content)が概要文(summary)より長ければそちらを使う"""
+    raw = entry.get("summary", "") or ""
+    for c in entry.get("content") or []:
+        value = c.get("value", "") if hasattr(c, "get") else ""
+        if len(value) > len(raw):
+            raw = value
+    raw = re.sub(r"<(script|style)\b.*?</\1>", " ", raw, flags=re.S | re.I)
+    text = re.sub(r"<[^>]+>", " ", raw)
+    return re.sub(r"\s+", " ", text).strip()[:limit]
+
+
 def matches_filters(feed: dict, title: str, text: str) -> bool:
     """feed の include(いずれかを含む)と exclude(どれも含まない)で記事を絞る(大小文字は無視)"""
     haystack = (title + " " + text).lower()
@@ -161,8 +173,7 @@ def fetch_new_articles(
             published = datetime(*ts[:6], tzinfo=timezone.utc) if ts else now
             if published < cutoff and not (aid in retry_ids and published >= retry_cutoff):
                 continue
-            text = re.sub(r"<[^>]+>", " ", entry.get("summary", ""))
-            text = re.sub(r"\s+", " ", text).strip()[:1000]
+            text = entry_text(entry, cfg.get("text_chars", 1200))
             title = entry.get("title", "(no title)")
             if not matches_filters(feed, title, text):
                 continue

@@ -425,3 +425,26 @@ def test_main_stores_category(env):
     env.run(FakeClient({"m": [ok_json(*ids)]}))
     # env の feed には category がないので、保存される項目に category は含まれない
     assert all("category" not in a for a in env.state()["articles"])
+
+
+def test_entry_text_prefers_longer_content_and_strips_markup():
+    entry = {
+        "summary": "<p>short</p>",
+        "content": [{"value": "<p>full</p><script>alert(1)</script><style>p{}</style> body  text"}],
+    }
+    assert build.entry_text(entry, 1000) == "full body text"
+
+
+def test_entry_text_falls_back_to_summary_and_truncates():
+    assert build.entry_text({"summary": "<b>abc</b>def"}, 1000) == "abc def"
+    assert build.entry_text({"summary": "x" * 50}, 10) == "x" * 10
+    assert build.entry_text({}, 10) == ""
+    assert build.entry_text({"summary": "keep", "content": [{"value": "no"}]}, 10) == "keep"
+
+
+def test_fetch_uses_text_chars_from_config(fake_feed):
+    entry = _entry("http://x/1", datetime.now(timezone.utc))
+    entry["content"] = [{"value": "<p>" + "あ" * 300 + "</p>"}]
+    fake_feed([entry])
+    cfg = {"feeds": [{"name": "F", "url": "u"}], "text_chars": 120}
+    assert len(build.fetch_new_articles(cfg, set())[0]["text"]) == 120
