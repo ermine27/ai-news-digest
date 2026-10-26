@@ -397,3 +397,31 @@ def test_fetch_applies_feed_keyword_filters(fake_feed):
     fake_feed(entries)
     cfg = {"feeds": [{"name": "F", "url": "u", "include": ["llm"]}]}
     assert [a["url"] for a in build.fetch_new_articles(cfg, set())] == ["http://x/ai"]
+
+
+def test_format_interests_list_and_dict():
+    assert build.format_interests(["LLM", " ", "規制"]) == "LLM、規制"
+    assert build.format_interests(None) == ""
+    text = build.format_interests({"AI": ["LLM"], "セキュリティー": ["脆弱性", "ランサムウェア"], "空": []})
+    assert text == "AI: LLM\nセキュリティー: 脆弱性、ランサムウェア"
+
+
+def test_build_prompt_includes_category_interests():
+    p = build.build_prompt([{"id": "n1"}], {"セキュリティー": ["脆弱性"]}, [])
+    assert "セキュリティー: 脆弱性" in p
+    assert "AI分野" not in p  # AI 専用の記述は残さない
+
+
+def test_fetch_sets_category_from_feed(fake_feed):
+    fake_feed([_entry("http://x/1", datetime.now(timezone.utc))])
+    cfg = {"feeds": [{"name": "F", "url": "u", "category": "セキュリティー"}]}
+    assert build.fetch_new_articles(cfg, set())[0]["category"] == "セキュリティー"
+    cfg = {"feeds": [{"name": "F", "url": "u"}]}
+    assert build.fetch_new_articles(cfg, set())[0]["category"] == ""
+
+
+def test_main_stores_category(env):
+    ids = [aid(u) for u in URLS]
+    env.run(FakeClient({"m": [ok_json(*ids)]}))
+    # env の feed には category がないので、保存される項目に category は含まれない
+    assert all("category" not in a for a in env.state()["articles"])

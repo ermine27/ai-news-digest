@@ -24,7 +24,7 @@ CONFIG_PATH = ROOT / "config.yml"
 DATA_PATH = ROOT / "docs" / "data.enc.json"
 PBKDF2_ITERATIONS = 600_000  # index.html 側は data.enc.json の iter を参照する
 
-PROMPT = """あなたはAI分野のニュース編集者です。
+PROMPT = """あなたは技術ニュース（AI・セキュリティー・プログラミングなど）の編集者です。
 以下のJSON配列の各記事について、日本語で次の項目を持つJSON配列だけを返してください。
 - id: 入力のidをそのまま返す
 - title_ja: 日本語タイトル（40字以内）
@@ -32,11 +32,11 @@ PROMPT = """あなたはAI分野のニュース編集者です。
 - stars: 注目度（1〜5の整数）
 - dup_of: 同じ出来事を扱う記事が「既出の記事」または入力の先頭側にあれば、その記事のid。なければ null（別の切り口・続報は重複としない）
 
-注目度の基準:
-5=業界全体に影響する発表（主要モデル・規制・大型提携）
-4=主要企業の新製品・重要な研究成果
-3=実務に役立つ技術情報・ツール更新
-2=小規模な更新・解説記事
+注目度の基準（入力の category は分野の目安。どの分野でも同じ基準で採点する）:
+5=業界・社会全体に影響する出来事（主要製品・規制・大型提携・広範囲に及ぶ重大インシデントや脆弱性）
+4=主要企業の新製品・重要な研究成果・実害のある脆弱性や攻撃
+3=実務に役立つ技術情報・ツール更新・実践的な解説
+2=小規模な更新・一般的な解説記事
 1=宣伝色が強い・重要度が低い
 __INTERESTS__
 既出の記事（dup_of の候補）:
@@ -174,6 +174,7 @@ def fetch_new_articles(
                     "source": feed["name"],
                     "title": title,
                     "text": text,
+                    "category": feed.get("category", ""),
                     "published": published.isoformat(),
                 }
             )
@@ -183,12 +184,24 @@ def fetch_new_articles(
     return sorted(articles, key=lambda a: a["published"], reverse=True)
 
 
-def build_prompt(payload: list, interests: list, known: list) -> str:
+def format_interests(interests) -> str:
+    """関心領域を文にする。リスト(全分野共通)とカテゴリー別の辞書の両方を受け付ける"""
+    def clean(topics):
+        return [str(t).strip() for t in (topics or []) if str(t).strip()]
+
+    if isinstance(interests, dict):
+        parts = [f"{cat}: " + "、".join(clean(ts)) for cat, ts in interests.items() if clean(ts)]
+        return "\n".join(parts)
+    return "、".join(clean(interests))
+
+
+def build_prompt(payload: list, interests, known: list) -> str:
     """要約プロンプトを組み立てる。interests があれば採点の補正指示を加える"""
-    topics = [str(t).strip() for t in interests if str(t).strip()]
+    topics = format_interests(interests)
     if topics:
         note = (
-            "\n読者の関心領域: " + "、".join(topics) + "\n"
+            "\n読者の関心領域（カテゴリー別の場合は、記事の category に対応する行を使う）:\n"
+            + topics + "\n"
             "上の基準で採点したうえで、関心領域に直接関わる記事は1段階上げ、"
             "無関係な記事は1段階下げてください（結果は1〜5に収める）。\n"
         )
@@ -264,7 +277,13 @@ def summarize_batch(
     主モデルの永続エラーは即失敗、フォールバック側の永続エラーは警告して次へ進む。
     """
     payload = [
-        {"id": a["id"], "title": a["title"], "text": a["text"], "source": a["source"]}
+        {
+            "id": a["id"],
+            "title": a["title"],
+            "text": a["text"],
+            "source": a["source"],
+            "category": a.get("category", ""),
+        }
         for a in batch
     ]
     prompt = build_prompt(payload, interests, known)
@@ -405,6 +424,8 @@ def run(stats: dict) -> None:
                 "stars": stars,
                 "published": a["published"],
             }
+            if a.get("category"):
+                item["category"] = a["category"]
             if dups.get(a["id"]):
                 item["dup_of"] = dups[a["id"]]
             articles.append(item)

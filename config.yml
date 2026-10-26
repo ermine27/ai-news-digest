@@ -9,7 +9,7 @@ fallback_models:
   - gemini-3.1-flash-lite
 
 # 取得対象フィード（HTTP 200 を確認済みの RSS/Atom）
-# 任意項目: limit(1 回に取る最大件数)、include(いずれかを含む記事だけ)、exclude(含む記事を除く)
+# 任意項目: category(画面の絞り込み用)、limit(1 回に取る最大件数)、include(いずれかを含む記事だけ)、exclude(含む記事を除く)
 feeds:
   - name: OpenAI News
     url: https://openai.com/news/rss.xml
@@ -23,6 +23,7 @@ feeds:
     url: https://aws.amazon.com/blogs/machine-learning/feed/
 
 # 関心領域（注目度の補正に使う。空または削除で従来どおりの採点）
+# リストなら全分野共通。カテゴリー名をキーにした辞書なら分野別にできる
 interests:
   - LLM の実務活用・開発ツール
   - AI 規制・政策
