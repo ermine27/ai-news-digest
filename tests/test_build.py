@@ -350,3 +350,50 @@ def test_main_partial_failure_is_not_alert(env):
     assert [a["id"] for a in st["articles"]] == [ids[0]]
     assert set(st["failures"]) == {ids[1]}
     assert "alert=false" in env.output.read_text(encoding="utf-8")
+
+
+def test_matches_filters_include_exclude_case_insensitive():
+    feed = {"include": ["LLM", "エージェント"], "exclude": ["PR"]}
+    assert build.matches_filters(feed, "New llm released", "")
+    assert build.matches_filters(feed, "t", "AIエージェント入門")
+    assert not build.matches_filters(feed, "Weather", "sunny")  # include に当たらない
+    assert not build.matches_filters(feed, "LLM sponsored", "PR記事")  # exclude に当たる
+    assert build.matches_filters({}, "anything", "")  # 指定なしは全件通す
+
+
+def test_round_robin_shares_quota_across_lists():
+    lists = [["a1", "a2", "a3", "a4"], ["b1"], ["c1", "c2"]]
+    assert build.round_robin(lists, 5) == ["a1", "b1", "c1", "a2", "c2"]
+    assert build.round_robin(lists, 100) == ["a1", "b1", "c1", "a2", "c2", "a3", "a4"]
+    assert build.round_robin([], 3) == []
+
+
+def test_fetch_gives_each_feed_a_fair_share(monkeypatch):
+    now = datetime.now(timezone.utc)
+    noisy = [_entry(f"http://noisy/{i}", now - timedelta(minutes=i)) for i in range(8)]
+    quiet = [_entry(f"http://quiet/{i}", now - timedelta(hours=5 + i)) for i in range(2)]
+    feeds = {"http://noisy.invalid": noisy, "http://quiet.invalid": quiet}
+    monkeypatch.setattr(
+        build.feedparser, "parse",
+        lambda url, agent=None: SimpleNamespace(entries=feeds[url]),
+    )
+    cfg = {
+        "feeds": [
+            {"name": "Noisy", "url": "http://noisy.invalid", "limit": 3},
+            {"name": "Quiet", "url": "http://quiet.invalid"},
+        ],
+        "max_new_per_run": 4,
+    }
+    items = build.fetch_new_articles(cfg, set())
+    by_source = sorted(a["source"] for a in items)
+    assert by_source == ["Noisy", "Noisy", "Quiet", "Quiet"]  # 投稿が新しい Noisy が独占しない
+
+
+def test_fetch_applies_feed_keyword_filters(fake_feed):
+    now = datetime.now(timezone.utc)
+    entries = [_entry("http://x/ai", now), _entry("http://x/other", now)]
+    entries[0]["title"] = "LLM news"
+    entries[1]["title"] = "cooking"
+    fake_feed(entries)
+    cfg = {"feeds": [{"name": "F", "url": "u", "include": ["llm"]}]}
+    assert [a["url"] for a in build.fetch_new_articles(cfg, set())] == ["http://x/ai"]

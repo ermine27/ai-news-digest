@@ -9,6 +9,7 @@ fallback_models:
   - gemini-3.1-flash-lite
 
 # 取得対象フィード（HTTP 200 を確認済みの RSS/Atom）
+# 任意項目: limit(1 回に取る最大件数)、include(いずれかを含む記事だけ)、exclude(含む記事を除く)
 feeds:
   - name: OpenAI News
     url: https://openai.com/news/rss.xml
@@ -28,8 +29,8 @@ interests:
   - 新モデルの発表と性能評価
 
 max_age_hours: 48       # 公開から何時間以内の記事を対象にするか(要約に失敗中の記事は retention_days まで再試行)
-per_feed_limit: 10      # 1 フィードあたりの最大取得件数
-max_new_per_run: 30     # 1 回の実行で要約する最大件数
+per_feed_limit: 10      # 1 フィードあたり確認する最大件数(フィードごとの limit で、取る件数をさらに絞れる)
+max_new_per_run: 30     # 1 回の実行で要約する最大件数(各フィードから均等に集める)
 batch_size: 5           # 1 リクエストで要約する件数
 retention_days: 14      # 保持日数
 dedup_window_hours: 72  # 重複判定の候補にする既出記事の期間(時間)
