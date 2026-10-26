@@ -448,3 +448,30 @@ def test_fetch_uses_text_chars_from_config(fake_feed):
     fake_feed([entry])
     cfg = {"feeds": [{"name": "F", "url": "u"}], "text_chars": 120}
     assert len(build.fetch_new_articles(cfg, set())[0]["text"]) == 120
+
+
+# ---- 実際の config.yml の整合性 ----
+
+def _real_config():
+    return build.yaml.safe_load(
+        (Path(__file__).resolve().parent.parent / "config.yml").read_text(encoding="utf-8")
+    )
+
+
+def test_real_config_feeds_are_well_formed():
+    cfg = _real_config()
+    feeds = cfg["feeds"]
+    assert feeds
+    assert len({f["url"] for f in feeds}) == len(feeds)  # URL の重複なし
+    assert len({f["name"] for f in feeds}) == len(feeds)  # 名前の重複なし
+    for f in feeds:
+        assert f["url"].startswith("https://")
+        assert isinstance(f.get("limit", 1), int) and f.get("limit", 1) >= 1
+
+
+def test_real_config_interests_match_feed_categories():
+    cfg = _real_config()
+    interests = cfg.get("interests")
+    if isinstance(interests, dict):
+        categories = {f["category"] for f in cfg["feeds"] if f.get("category")}
+        assert set(interests) <= categories  # 該当フィードのないカテゴリーの関心領域を書かない
