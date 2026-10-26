@@ -1,6 +1,6 @@
 {
-  "name": "AI News",
-  "short_name": "AI News",
+  "name": "Tech Digest",
+  "short_name": "Tech Digest",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
