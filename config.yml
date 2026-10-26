@@ -106,3 +106,5 @@ retention_days: 14      # 保持日数
 max_data_kb: 2000       # data.enc.json がこのサイズ(KB)を超えたらジョブサマリーで警告する
 dedup_window_hours: 72  # 重複判定の候補にする既出記事の期間(時間)
 max_summary_attempts: 3 # 要約に失敗した記事を再試行する実行回数の上限
+time_budget_minutes: 12 # 要約に使える時間の上限(分)。超えたら残りは次回に回す(ジョブの上限は 20 分)
+max_consecutive_batch_failures: 2 # この回数だけ連続して全件失敗したら API 不調とみなして打ち切る

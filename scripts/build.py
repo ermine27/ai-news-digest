@@ -259,10 +259,18 @@ class PermanentError(Exception):
     """再試行しても解消しない API エラー(モデルID・APIキーの誤りなど)"""
 
 
-def call_model(client, model: str, prompt: str, attempts: int) -> dict | None:
-    """1 つのモデルを上限付きでリトライして呼ぶ。一時エラーで尽きたら None"""
+def call_model(
+    client, model: str, prompt: str, attempts: int, deadline: float | None = None
+) -> dict | None:
+    """1 つのモデルを上限付きでリトライして呼ぶ。一時エラーで尽きる、または deadline を過ぎたら None
+
+    deadline は time.monotonic() 基準の時刻。過ぎていたら新しい試行を始めない。
+    """
     global api_calls
     for attempt in range(attempts):
+        if deadline is not None and time.monotonic() >= deadline:
+            print("[警告] 時間予算を超えたため、これ以上リトライしません", flush=True)
+            return None
         api_calls += 1
         try:
             resp = client.models.generate_content(
@@ -278,13 +286,22 @@ def call_model(client, model: str, prompt: str, attempts: int) -> dict | None:
             if getattr(exc, "code", None) in (400, 401, 403, 404):
                 raise PermanentError(str(exc)) from exc
             wait = 20 * (attempt + 1)
+            if deadline is not None and time.monotonic() + wait >= deadline:
+                print(f"[警告] 要約失敗 {model}: {exc} → 時間予算の都合でリトライしません", flush=True)
+                return None
             print(f"[警告] 要約失敗 {model} ({attempt + 1}/{attempts}): {exc} → {wait}秒待機")
             time.sleep(wait)
     return None
 
 
 def summarize_batch(
-    client, model: str, batch: list, interests: list, known: list, fallback_models=()
+    client,
+    model: str,
+    batch: list,
+    interests: list,
+    known: list,
+    fallback_models=(),
+    deadline: float | None = None,
 ) -> dict:
     """記事のまとまりを 1 リクエストで要約・翻訳・採点する。失敗時は空辞書
 
@@ -303,7 +320,7 @@ def summarize_batch(
     ]
     prompt = build_prompt(payload, interests, known)
     try:
-        result = call_model(client, model, prompt, 4)
+        result = call_model(client, model, prompt, 4, deadline)
     except PermanentError as exc:
         sys.exit(f"[エラー] 再試行しても解消しない失敗です（モデルID・APIキーを確認）: {exc}")
     if result is not None:
@@ -311,7 +328,7 @@ def summarize_batch(
     for fb in fallback_models:
         print(f"[警告] {model} が失敗し続けたため {fb} で再試行します", flush=True)
         try:
-            result = call_model(client, fb, prompt, 2)
+            result = call_model(client, fb, prompt, 2, deadline)
         except PermanentError as exc:
             print(f"[警告] フォールバック {fb} は使えません（モデルIDを確認）: {exc}")
             continue
@@ -341,6 +358,7 @@ def build_report(stats: dict) -> str:
         f"- 新規候補: {stats['candidates']} 件",
         f"- 要約: 成功 {stats['added']} 件 / 失敗 {stats['failed']} 件",
         f"- 試行上限で見送り中: {stats['given_up']} 件",
+        f"- 時間予算・連続失敗のため次回に回した記事: {stats.get('unprocessed', 0)} 件",
         f"- Gemini 呼び出し: {stats.get('api_calls', 0)} 回(リトライ・フォールバックを含む)",
     ]
     if stats.get("data_kb") is not None:
@@ -422,9 +440,18 @@ def run(stats: dict) -> None:
         api_key=api_key, http_options=types.HttpOptions(timeout=60_000)  # ミリ秒
     )
     size = cfg.get("batch_size", 10)
+    # Gemini が不調でも 20 分のジョブ上限に達して全てを失わないよう、時間予算と連続失敗で打ち切る
+    deadline = time.monotonic() + cfg.get("time_budget_minutes", 12) * 60
+    max_consecutive = cfg.get("max_consecutive_batch_failures", 2)
+    consecutive = 0
+    unprocessed = 0
     added = 0
     failed = 0
     for i in range(0, len(new_items), size):
+        if time.monotonic() >= deadline:
+            unprocessed = len(new_items) - i
+            print(f"[警告] 時間予算を超えたため、残り {unprocessed} 件は次回に回します", flush=True)
+            break
         chunk = new_items[i : i + size]
         print(f"要約中: {i + 1}〜{i + len(chunk)} 件目", flush=True)
         known = known_for_dedup(articles, cfg.get("dedup_window_hours", 72))
@@ -435,7 +462,9 @@ def run(stats: dict) -> None:
             cfg.get("interests") or [],
             known,
             cfg.get("fallback_models") or [],
+            deadline,
         )
+        consecutive = 0 if result else consecutive + 1
         dups = resolve_dup_of(chunk, result, {k["id"] for k in known})
         for a in chunk:
             r = result.get(a["id"])
@@ -465,9 +494,19 @@ def run(stats: dict) -> None:
                 item["dup_of"] = dups[a["id"]]
             articles.append(item)
             added += 1
+        rest = len(new_items) - (i + len(chunk))
+        if consecutive >= max_consecutive and rest > 0:
+            unprocessed = rest
+            print(
+                f"[警告] {consecutive} バッチ連続で全件失敗したため API 不調とみなし、"
+                f"残り {unprocessed} 件は次回に回します",
+                flush=True,
+            )
+            break
         time.sleep(5)  # RPM 対策の間隔
 
     stats["added"], stats["failed"] = added, failed
+    stats["unprocessed"] = unprocessed
     print(f"要約結果: 成功 {added} 件 / 失敗 {failed} 件", flush=True)
     for aid, f in failures.items():
         if f["count"] >= max_attempts and aid not in given_up:
