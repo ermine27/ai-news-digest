@@ -510,3 +510,50 @@ def test_main_counts_api_calls_including_retries_and_fallback(env, tmp_path):
     text = summary.read_text(encoding="utf-8")
     assert "Gemini 呼び出し: 5 回" in text  # 主モデル 4 回 + フォールバック 1 回
     assert "KB" in text
+
+
+# ---- 時間予算・連続失敗の打ち切り ----
+
+def test_call_model_does_not_start_after_deadline():
+    client = FakeClient({"m": []})
+    past = build.time.monotonic() - 1
+    assert build.call_model(client, "m", "p", 4, past) is None
+    assert client.calls == []
+
+
+def test_call_model_skips_retry_wait_that_passes_deadline():
+    client = FakeClient({"m": [FakeErr(503)] * 4})
+    soon = build.time.monotonic() + 5  # 次の待機(20 秒)は期限を超える
+    assert build.call_model(client, "m", "p", 4, soon) is None
+    assert client.calls == ["m"]  # 1 回試して、待たずに打ち切る
+
+
+def _write_cfg(**extra):
+    cfg = build.yaml.safe_load(build.CONFIG_PATH.read_text(encoding="utf-8"))
+    cfg.update(extra)
+    build.CONFIG_PATH.write_text(build.yaml.safe_dump(cfg), encoding="utf-8")
+
+
+def test_main_stops_when_time_budget_is_zero(env):
+    _write_cfg(time_budget_minutes=0)
+    client = FakeClient({"m": []})  # 呼ばれたら IndexError になる
+    env.run(client)
+    assert client.calls == []
+    assert not env.data_path.exists()  # 何も処理していないので保存もしない
+
+
+def test_main_stops_after_consecutive_batch_failures(env):
+    _write_cfg(batch_size=1, max_consecutive_batch_failures=1)
+    client = FakeClient({"m": [FakeErr(504)] * 4})  # 2 バッチ目に進めば IndexError
+    env.run(client)
+    assert client.calls == ["m"] * 4  # 1 バッチ目で全件失敗 → 打ち切り
+    st = env.state()
+    assert len(st["failures"]) == 1  # 着手した 1 件だけ失敗に数え、未着手は数えない
+
+
+def test_main_continues_after_partial_failure(env):
+    _write_cfg(batch_size=1, max_consecutive_batch_failures=1)
+    ids = [aid(u) for u in URLS]
+    # 新しい順: ids[0] を先に処理。成功したら連続失敗は 0 に戻り、次のバッチへ進む
+    env.run(FakeClient({"m": [ok_json(ids[0]), ok_json(ids[1])]}))
+    assert {a["id"] for a in env.state()["articles"]} == set(ids)
